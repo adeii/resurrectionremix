@@ -480,7 +480,7 @@
   
   <project path="packages/apps/OmniSwitch" name="android_packages_apps_OmniSwitch" remote="rr" revision="kitkat1" />
    <!-- Google play services -->
-  <project path="external/google/google_play_services" name="SlimRoms/android_external_google_google_play_services" remote="github" revision="kk4.4" />
+  <!--project path="external/google/google_play_services" name="SlimRoms/android_external_google_google_play_services" remote="github" revision="kk4.4" / -->
 
   <!-- HUAWEI Device Folders, Kernel & Proprietary BLOBS -->
   <project path="vendor/huawei" name="SlimKat-Y300/proprietary_vendor_huawei" remote="github" revision="slimkat"/>
