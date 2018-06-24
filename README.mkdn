@@ -64,9 +64,9 @@ Alright, so now we’re getting there. I have outlined the basics of what we’r
 
 ##### Initialize the RR repo and download the manifest
 
-      $  repo init -u https://github.com/adeii/resurrectionremix_manifest.git -b kk
+      $  repo init -u https://github.com/adeii/resurrectionremix.git -b kk
 
-##### Sync source
+##### Rename default-legacy.xml to default.xml (yes, overwrite!) and sync source
 
       $  repo sync -f --force-sync --no-tags --no-clone-bundle
 
@@ -77,4 +77,4 @@ Alright, so now we’re getting there. I have outlined the basics of what we’r
       
 ##### Instead of using the script, you can manually use these commands
 
-      $  . build/envsetup.sh && brunch <device>
+      $  . build/envsetup.sh && brunch u8833 (or u8825 or u8951)
