@@ -288,7 +288,7 @@
   <project path="external/vim" name="LineageOS/android_external_vim" />
   <project path="external/webp" name="LineageOS/android_external_webp" />
   <project path="external/webrtc" name="LineageOS/android_external_webrtc" groups="pdk" />
-  <project path="external/webkit" name="Dazzozo/android_external_webkit" remote="gh" revision="kitkat" />
+  <project path="external/webkit" name="Dazzozo/android_external_webkit" remote="github" revision="kitkat" />
   <project path="external/wpa_supplicant_8" name="LineageOS/android_external_wpa_supplicant_8" groups="pdk" />
   <project path="external/xmlwriter" name="LineageOS/android_external_xmlwriter" />
   <!-- project path="external/wpa_supplicant_8_ti" name="LineageOS/android_external_wpa_supplicant_8_ti" / -->
@@ -324,7 +324,7 @@
   <project path="frameworks/webview" name="LineageOS/android_frameworks_webview" />
   <project path="frameworks/wilhelm" name="LineageOS/android_frameworks_wilhelm" />
   <project path="hardware/akm" name="LineageOS/android_hardware_akm" groups="pdk" />
-  <project path="hardware/atheros/wifi/ath6kl-huawei" name="Dazzozo/android_hardware_atheros_wifi_ath6kl-huawei" remote="gh" revision="master" />
+  <project path="hardware/atheros/wifi/ath6kl-huawei" name="Dazzozo/android_hardware_atheros_wifi_ath6kl-huawei" remote="github" revision="master" />
   <project path="hardware/atheros/wlan" name="LineageOS/android_hardware_atheros_wlan" remote="github" revision="cm-11.0" />
   <project path="hardware/broadcom/libbt" name="LineageOS/android_hardware_broadcom_libbt" groups="pdk" />
   <project path="hardware/broadcom/wlan" name="LineageOS/android_hardware_broadcom_wlan" groups="broadcom_wlan" />
@@ -337,7 +337,7 @@
   <project path="hardware/qcom/camera" name="LineageOS/android_hardware_qcom_camera" groups="qcom" />
   <project path="hardware/qcom/display" name="LineageOS/android_hardware_qcom_display" groups="qcom" />
   <project path="hardware/qcom/display-legacy" name="Dazzozo/android_hardware_qcom_display-legacy" remote="github" revision="jellybean-mr2" />
-  <project path="hardware/qcom/fm" name="LineageOS/android_hardware_qcom_fm" remote="gh" revision="cm-11.0"/>
+  <project path="hardware/qcom/fm" name="LineageOS/android_hardware_qcom_fm" remote="github" revision="cm-11.0"/>
   <project path="hardware/qcom/gps" name="SlimKat-Y300/android_hardware_qcom_gps" remote="github" revision="kitkat" />
   <project path="hardware/qcom/keymaster" name="LineageOS/android_hardware_qcom_keymaster" groups="qcom" />
   <project path="hardware/qcom/media" name="LineageOS/android_hardware_qcom_media" groups="qcom" />
