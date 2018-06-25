@@ -66,8 +66,9 @@ Alright, so now we’re getting there. I have outlined the basics of what we’r
 
       $  repo init -u https://github.com/adeii/resurrectionremix.git -b kk
 
-##### Rename default-legacy.xml to default.xml (yes, overwrite!) and sync source
-
+##### Rename default-legacy.xml (or default-caf.xml) to default.xml (yes, overwrite, if had to!) and sync source
+   
+      $  cp .repo/manifests/default-legacy.xml .repo/manifests/default.xml
       $  repo sync -f --force-sync --no-tags --no-clone-bundle
 
 ##### To build Resurrection Remix ROM
