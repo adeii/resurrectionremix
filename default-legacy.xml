@@ -305,7 +305,7 @@
   <project path="frameworks/opt/calendar" name="LineageOS/android_frameworks_opt_calendar" />
   <project path="frameworks/opt/carddav" name="LineageOS/android_frameworks_opt_carddav" />
   <project path="frameworks/opt/colorpicker" name="LineageOS/android_frameworks_opt_colorpicker" />
-  <project path="frameworks/opt/datetimepicker" name="LineageOS/android_frameworks_opt_datetimepicker" />
+  <!-- project path="frameworks/opt/datetimepicker" name="LineageOS/android_frameworks_opt_datetimepicker" / -->
   <project path="frameworks/opt/emoji" name="LineageOS/android_frameworks_opt_emoji" />
   <project path="frameworks/opt/hardware" name="LineageOS/android_frameworks_opt_hardware" />
   <project path="frameworks/opt/inputmethodcommon" name="LineageOS/android_frameworks_opt_inputmethodcommon" />
@@ -314,7 +314,8 @@
   <project path="frameworks/opt/net/voip" name="LineageOS/android_frameworks_opt_net_voip" />
   <project path="frameworks/opt/photoviewer" name="LineageOS/android_frameworks_opt_photoviewer" />
   <project path="frameworks/opt/timezonepicker" name="LineageOS/android_frameworks_opt_timezonepicker" />
-  <project path="frameworks/opt/telephony" name="LineageOS/android_frameworks_opt_telephony" groups="pdk" />
+  <!-- project path="frameworks/opt/telephony" name="LineageOS/android_frameworks_opt_telephony" groups="pdk" />
+  <project path="frameworks/opt/telephony-msim" name="LineageOS/android_frameworks_opt_telephony-msim" / --> 
   <project path="frameworks/opt/vcard" name="LineageOS/android_frameworks_opt_vcard" />
   <project path="frameworks/rs" name="LineageOS/android_frameworks_rs" groups="pdk" />
   <project path="frameworks/support" name="LineageOS/android_frameworks_support" />
@@ -457,9 +458,9 @@
   <project path="frameworks/av" name="android_frameworks_av" remote="rrr" revision="kitkat1" />
   <project path="frameworks/base" name="frameworks_base" remote="rr" revision="kitkat1" />
   <project path="frameworks/native" name="android_frameworks_native" remote="rrr" revision="kitkat1" />
-  <!-- project path="frameworks/opt/cards" name="frameworks_opt_cards" remote="rr" revision="kitkat1"/ -->
-  <!-- project path="frameworks/opt/datetimepicker" name="android_frameworks_opt_datetimepicker" remote="rr" revision="kitkat1"/ -->
-  <!-- project path="frameworks/opt/telephony" name="android_frameworks_opt_telephony" groups="pdk" remote="rr" revision="kitkat1"/ -->
+  <project path="frameworks/opt/cards" name="frameworks_opt_cards" remote="rr" revision="kitkat1"/>
+  <project path="frameworks/opt/datetimepicker" name="android_frameworks_opt_datetimepicker" remote="rr" revision="kitkat1"/>
+  <project path="frameworks/opt/telephony" name="android_frameworks_opt_telephony" groups="pdk" remote="rr" revision="kitkat1"/>
   
   <project path="packages/apps/Camera2" name="LineageOS/android_packages_apps_Camera2" />
   <project path="packages/apps/Contacts" name="android_packages_apps_Contacts" remote="rr" revision="cm-11.0"/>
