@@ -38,11 +38,11 @@
            sync-c="true"
            sync-j="4" />
 
-  <project path="build" name="android_build" remote="rr" revision="kk2" >
+  <project path="build" name="android_build" remote="rr" revision="kitkat1" >
     <copyfile src="core/root.mk" dest="Makefile" />
   </project>
 
-  <project path="android" name="adeii/resurrectionremix" remote="rr" revision="master" />
+  <project path="android" name="adeii/resurrectionremix" remote="github" revision="kk2" />
 
   <project path="abi/cpp" name="CyanogenMod/android_abi_cpp" groups="pdk" />
   <project path="art" name="CyanogenMod/android_art" />
