@@ -69,7 +69,7 @@ Alright, so now we’re getting there. I have outlined the basics of what we’r
 ##### Copy default-legacy.xml (or default-caf.xml) to default.xml and to manifest.xml (yes, overwrite, if had to!) and sync source
    
       $  cp .repo/manifests/default-legacy.xml .repo/manifests/default.xml
-      $  cp .repo/manifests/default-legacy.xml .repo/manifests.xml
+      $  cp .repo/manifests/default-legacy.xml .repo/manifest.xml
       $  repo sync -f --force-sync --no-tags --no-clone-bundle
 
 ##### To build Resurrection Remix ROM
