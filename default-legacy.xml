@@ -453,10 +453,10 @@
   <!-- project path="frameworks/base" name="frameworks_base" remote="rr" revision="kitkat1" / -->
   <project path="frameworks/base" name="frameworks_base_jellybean" remote="rr" revision="kitkat1" />
   <project path="frameworks/native" name="android_frameworks_native" remote="rrr" revision="kitkat1" />
-  <project path="frameworks/opt/cards" name="frameworks_opt_cards" remote="rrr" revision="kitkat1"/>
+  <project path="frameworks/opt/cards" name="frameworks_opt_cards" remote="rrr" revision="kitkat1" />
   <!-- project path="frameworks/opt/datetimepicker" name="android_frameworks_opt_datetimepicker" remote="rrr" revision="cm-11.0"/ -->
-  <project path="frameworks/opt/datetimepicker" name="CyanogenMod/android_frameworks_opt_datetimepicker" remote="github" revision="cm-11.0/>
-  <project path="frameworks/opt/telephony" name="android_frameworks_opt_telephony" groups="pdk" remote="rr" revision="cm-11.0"/>
+  <project path="frameworks/opt/datetimepicker" name="CyanogenMod/android_frameworks_opt_datetimepicker" remote="github" revision="cm-11.0" />
+  <project path="frameworks/opt/telephony" name="android_frameworks_opt_telephony" groups="pdk" remote="rr" revision="cm-11.0" />
    
   <project path="packages/apps/Camera2" name="LineageOS/android_packages_apps_Camera2" />
   <project path="packages/apps/Contacts" name="android_packages_apps_Contacts" remote="rr" revision="cm-11.0"/>
