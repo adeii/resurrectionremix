@@ -1,0 +1,1326 @@
+From 5e49b497ae2019586937aae0e8159292363728b5 Mon Sep 17 00:00:00 2001
+From: Leon Scroggins III <scroggo@google.com>
+Date: Tue, 3 Dec 2013 16:26:51 -0500
+Subject: [PATCH] Update framework to use M33 Skia. DO NOT MERGE
+
+(These CLs are already in master.)
+
+Bug: 13246311
+
+This cherry-picks 7 CLs:
+
+-----------------------------------------------------------------------
+
+Remove calls to deprecated SkBitmap::setIsOpaque()
+
+setIsOpaque() has been removed from ToT Skia.
+
+Update setters for mIsPremultiplied and hasAlpha to take the
+other into consideration.
+
+cherry-pick from: I1b36b0b0ce7126031eb7b769b563c17dcd4b306a
+
+-----------------------------------------------------------------------
+
+Merge AssetStream with AssetStreamAdaptor.
+
+Add enums to the constructor for AssetStreamAdaptor to choose the
+different behaviors used by the (former) two different classes.
+
+The old clients of AssetStream now get the following features of
+AssetStreamAdaptor
+- Debugging statements on error.
+- The stream is an SkStreamRewindable.
+- getLength() returns the correct value, and the old way of getting
+  the length (read(NULL, 0)) is no longer implemented, since it is
+  no longer used.
+- isAtEnd() returns the correct value. ToT Skia makes it pure virtual,
+  so some implementation is necessary.
+
+cherry-pick from: I2a5395914e4f53830aaefee396556459083a1c56
+
+-----------------------------------------------------------------------
+
+Deprecate Android-specific SkPaint functions.
+
+The following functions were problematic:
+ const SkGlyph& getUnicharMetrics(SkUnichar, const SkMatrix*);
+ const SkGlyph& getGlyphMetrics(uint16_t, const SkMatrix*);
+ const void* findImage(const SkGlyph&, const SkMatrix*);
+
+Replacing them with calls through SkGlyphCache solved a nasty crash
+bug, so they have all been deprecated.
+
+Bug: 11968757
+cherry-pick from: Id746315d41aec5b211b78b172a883c2061130f08
+
+-----------------------------------------------------------------------
+
+pass SkGlyphCache into updateGlyphCache()
+
+Doing so prevents us from double-locking the glyph cache, thereby
+effectively locking ourselves out of reusing work that we'd just done.
+
+Bug: 11968757
+cherry-pick from: I5c552f2d0bbe30af2ce9054ba684e7da756a0d89
+
+-----------------------------------------------------------------------
+
+Updates to the Skia API needed to merge the WebView m33 version of Skia.
+
+cherry-pick from: I0f63b53f2aae58871413b132742fc84138f069a3
+
+Bugfix for screenshots (recent apps) due to incorrect rowBytes computation
+
+bug: 12915192
+cherry-pick from: I4d5fe2a2f75baf66099e0970fb646686a1992714
+
+-----------------------------------------------------------------------
+
+Fix bug in AndroidPixelRef where we did not store the correct imageInfo for a recycled bitmap.
+
+cherry-pick from: I882483b78886e2f19fa4e43a86e69f5a82b3b7e5
+
+-----------------------------------------------------------------------
+
+Change-Id: Ie2b731a9f0795802418cfecddb4b684c92c64d33
+---
+ core/jni/android/graphics/Bitmap.cpp              |  24 +++--
+ core/jni/android/graphics/BitmapFactory.cpp       |  34 +++++--
+ core/jni/android/graphics/BitmapRegionDecoder.cpp |   9 +-
+ core/jni/android/graphics/Canvas.cpp              |   6 +-
+ core/jni/android/graphics/Graphics.cpp            |  43 +++++++--
+ core/jni/android/graphics/GraphicsJNI.h           |  11 ++-
+ core/jni/android/graphics/Movie.cpp               |   4 +-
+ core/jni/android/graphics/NinePatchPeeker.cpp     |  17 ++--
+ core/jni/android/graphics/Paint.cpp               |   3 +-
+ core/jni/android/graphics/Region.cpp              |   2 +-
+ core/jni/android/graphics/TextLayoutCache.cpp     |   5 +-
+ core/jni/android/graphics/Typeface.cpp            |  64 +------------
+ core/jni/android/graphics/Utils.cpp               |  15 +++
+ core/jni/android/graphics/Utils.h                 |  24 ++++-
+ core/jni/android/opengl/util.cpp                  |  10 +-
+ core/jni/android_view_Surface.cpp                 |   6 +-
+ core/jni/android_view_SurfaceControl.cpp          | 110 +++++++++-------------
+ core/jni/android_view_TextureView.cpp             |   3 +-
+ graphics/java/android/graphics/Bitmap.java        |  50 +++++++---
+ graphics/java/android/graphics/BitmapFactory.java |   7 ++
+ libs/hwui/TextureCache.cpp                        |   3 +-
+ libs/hwui/font/Font.cpp                           |  18 ++--
+ libs/hwui/font/Font.h                             |   5 +-
+ libs/hwui/font/FontUtil.h                         |   4 +-
+ media/tests/omxjpegdecoder/omx_jpeg_decoder.cpp   |   4 +-
+ 25 files changed, 269 insertions(+), 212 deletions(-)
+
+diff --git a/core/jni/android/graphics/Bitmap.cpp b/core/jni/android/graphics/Bitmap.cpp
+index eea9ee14dd0f8..2125763287643 100644
+--- a/core/jni/android/graphics/Bitmap.cpp
++++ b/core/jni/android/graphics/Bitmap.cpp
+@@ -227,7 +227,7 @@ static void ToColor_SI8_Alpha(SkColor dst[], const void* src, int width,
+     do {
+         *dst++ = SkUnPreMultiply::PMColorToColor(colors[*s++]);
+     } while (--width != 0);
+-    ctable->unlockColors(false);
++    ctable->unlockColors();
+ }
+ 
+ static void ToColor_SI8_Raw(SkColor dst[], const void* src, int width,
+@@ -240,7 +240,7 @@ static void ToColor_SI8_Raw(SkColor dst[], const void* src, int width,
+         *dst++ = SkColorSetARGB(SkGetPackedA32(c), SkGetPackedR32(c),
+                                 SkGetPackedG32(c), SkGetPackedB32(c));
+     } while (--width != 0);
+-    ctable->unlockColors(false);
++    ctable->unlockColors();
+ }
+ 
+ static void ToColor_SI8_Opaque(SkColor dst[], const void* src, int width,
+@@ -253,7 +253,7 @@ static void ToColor_SI8_Opaque(SkColor dst[], const void* src, int width,
+         *dst++ = SkColorSetRGB(SkGetPackedR32(c), SkGetPackedG32(c),
+                                SkGetPackedB32(c));
+     } while (--width != 0);
+-    ctable->unlockColors(false);
++    ctable->unlockColors();
+ }
+ 
+ // can return NULL
+@@ -442,9 +442,15 @@ static jboolean Bitmap_hasAlpha(JNIEnv* env, jobject, SkBitmap* bitmap) {
+     return !bitmap->isOpaque();
+ }
+ 
+-static void Bitmap_setHasAlpha(JNIEnv* env, jobject, SkBitmap* bitmap,
+-                               jboolean hasAlpha) {
+-    bitmap->setIsOpaque(!hasAlpha);
++static void Bitmap_setAlphaAndPremultiplied(JNIEnv* env, jobject, SkBitmap* bitmap,
++                                            jboolean hasAlpha, jboolean isPremul) {
++    if (!hasAlpha) {
++        bitmap->setAlphaType(kOpaque_SkAlphaType);
++    } else if (isPremul) {
++        bitmap->setAlphaType(kPremul_SkAlphaType);
++    } else {
++        bitmap->setAlphaType(kUnpremul_SkAlphaType);
++    }
+ }
+ 
+ static jboolean Bitmap_hasMipMap(JNIEnv* env, jobject, SkBitmap* bitmap) {
+@@ -543,14 +549,14 @@ static jboolean Bitmap_writeToParcel(JNIEnv* env, jobject,
+     p->writeInt32(bitmap->rowBytes());
+     p->writeInt32(density);
+ 
+-    if (bitmap->getConfig() == SkBitmap::kIndex8_Config) {
++    if (bitmap->config() == SkBitmap::kIndex8_Config) {
+         SkColorTable* ctable = bitmap->getColorTable();
+         if (ctable != NULL) {
+             int count = ctable->count();
+             p->writeInt32(count);
+             memcpy(p->writeInplace(count * sizeof(SkPMColor)),
+                    ctable->lockColors(), count * sizeof(SkPMColor));
+-            ctable->unlockColors(false);
++            ctable->unlockColors();
+         } else {
+             p->writeInt32(0);   // indicate no ctable
+         }
+@@ -770,7 +776,7 @@ static JNINativeMethod gBitmapMethods[] = {
+     {   "nativeRowBytes",           "(I)I", (void*)Bitmap_rowBytes },
+     {   "nativeConfig",             "(I)I", (void*)Bitmap_config },
+     {   "nativeHasAlpha",           "(I)Z", (void*)Bitmap_hasAlpha },
+-    {   "nativeSetHasAlpha",        "(IZ)V", (void*)Bitmap_setHasAlpha },
++    {   "nativeSetAlphaAndPremultiplied", "(IZZ)V", (void*)Bitmap_setAlphaAndPremultiplied},
+     {   "nativeHasMipMap",          "(I)Z", (void*)Bitmap_hasMipMap },
+     {   "nativeSetHasMipMap",       "(IZ)V", (void*)Bitmap_setHasMipMap },
+     {   "nativeCreateFromParcel",
+diff --git a/core/jni/android/graphics/BitmapFactory.cpp b/core/jni/android/graphics/BitmapFactory.cpp
+index da6219fcfeb1c..12a3c330e7fc4 100644
+--- a/core/jni/android/graphics/BitmapFactory.cpp
++++ b/core/jni/android/graphics/BitmapFactory.cpp
+@@ -124,12 +124,18 @@ static void scaleNinePatchChunk(android::Res_png_9patch* chunk, float scale) {
+ static SkPixelRef* installPixelRef(SkBitmap* bitmap, SkStreamRewindable* stream,
+         int sampleSize, bool ditherImage) {
+ 
++    SkImageInfo bitmapInfo;
++    if (!bitmap->asImageInfo(&bitmapInfo)) {
++        ALOGW("bitmap has unknown configuration so no memory has been allocated");
++        return NULL;
++    }
++
+     SkImageRef* pr;
+     // only use ashmem for large images, since mmaps come at a price
+     if (bitmap->getSize() >= 32 * 1024) {
+-        pr = new SkImageRef_ashmem(stream, bitmap->config(), sampleSize);
++        pr = new SkImageRef_ashmem(bitmapInfo, stream, sampleSize);
+     } else {
+-        pr = new SkImageRef_GlobalPool(stream, bitmap->config(), sampleSize);
++        pr = new SkImageRef_GlobalPool(bitmapInfo, stream, sampleSize);
+     }
+     pr->setDitherImage(ditherImage);
+     bitmap->setPixelRef(pr)->unref();
+@@ -157,7 +163,7 @@ class ScaleCheckingAllocator : public SkBitmap::HeapAllocator {
+     virtual bool allocPixelRef(SkBitmap* bitmap, SkColorTable* ctable) {
+         // accounts for scale in final allocation, using eventual size and config
+         const int bytesPerPixel = SkBitmap::ComputeBytesPerPixel(
+-                configForScaledOutput(bitmap->getConfig()));
++                configForScaledOutput(bitmap->config()));
+         const int requestedSize = bytesPerPixel *
+                 int(bitmap->width() * mScale + 0.5f) *
+                 int(bitmap->height() * mScale + 0.5f);
+@@ -191,8 +197,15 @@ class RecyclingPixelAllocator : public SkBitmap::Allocator {
+             return false;
+         }
+ 
++        SkImageInfo bitmapInfo;
++        if (!bitmap->asImageInfo(&bitmapInfo)) {
++            ALOGW("unable to reuse a bitmap as the target has an unknown bitmap configuration");
++            return false;
++        }
++
+         // Create a new pixelref with the new ctable that wraps the previous pixelref
+-        SkPixelRef* pr = new AndroidPixelRef(*static_cast<AndroidPixelRef*>(mPixelRef), ctable);
++        SkPixelRef* pr = new AndroidPixelRef(*static_cast<AndroidPixelRef*>(mPixelRef),
++                bitmapInfo, bitmap->rowBytes(), ctable);
+ 
+         bitmap->setPixelRef(pr)->unref();
+         // since we're already allocated, we lockPixels right away
+@@ -401,8 +414,11 @@ static jobject doDecode(JNIEnv* env, SkStreamRewindable* stream, jobject padding
+ 
+         // TODO: avoid copying when scaled size equals decodingBitmap size
+         SkBitmap::Config config = configForScaledOutput(decodingBitmap.config());
+-        outputBitmap->setConfig(config, scaledWidth, scaledHeight);
+-        outputBitmap->setIsOpaque(decodingBitmap.isOpaque());
++        // FIXME: If the alphaType is kUnpremul and the image has alpha, the
++        // colors may not be correct, since Skia does not yet support drawing
++        // to/from unpremultiplied bitmaps.
++        outputBitmap->setConfig(config, scaledWidth, scaledHeight, 0,
++                                decodingBitmap.alphaType());
+         if (!outputBitmap->allocPixels(outputAllocator, NULL)) {
+             return nullObjectReturn("allocation failed for scaled bitmap");
+         }
+@@ -414,7 +430,7 @@ static jobject doDecode(JNIEnv* env, SkStreamRewindable* stream, jobject padding
+         }
+ 
+         SkPaint paint;
+-        paint.setFilterBitmap(true);
++        paint.setFilterLevel(SkPaint::kLow_FilterLevel);
+ 
+         SkCanvas canvas(*outputBitmap);
+         canvas.scale(sx, sy);
+@@ -541,7 +557,9 @@ static jobject nativeDecodeAsset(JNIEnv* env, jobject clazz, jint native_asset,
+     } else {
+         // since we know we'll be done with the asset when we return, we can
+         // just use a simple wrapper
+-        stream = new AssetStreamAdaptor(asset);
++        stream = new AssetStreamAdaptor(asset,
++                                        AssetStreamAdaptor::kNo_OwnAsset,
++                                        AssetStreamAdaptor::kNo_HasMemoryBase);
+     }
+     SkAutoUnref aur(stream);
+     return doDecode(env, stream, padding, options, forcePurgeable, forcePurgeable);
+diff --git a/core/jni/android/graphics/BitmapRegionDecoder.cpp b/core/jni/android/graphics/BitmapRegionDecoder.cpp
+index ee47ac46ecd19..1412a0e900b36 100644
+--- a/core/jni/android/graphics/BitmapRegionDecoder.cpp
++++ b/core/jni/android/graphics/BitmapRegionDecoder.cpp
+@@ -29,7 +29,6 @@
+ #include "CreateJavaOutputStreamAdaptor.h"
+ #include "Utils.h"
+ #include "JNIHelp.h"
+-#include "SkTScopedPtr.h"
+ 
+ #include <android_runtime/AndroidRuntime.h>
+ #include "android_util_Binder.h"
+@@ -76,7 +75,7 @@ class SkBitmapRegionDecoder {
+     int fHeight;
+ };
+ 
+-static jobject createBitmapRegionDecoder(JNIEnv* env, SkStream* stream) {
++static jobject createBitmapRegionDecoder(JNIEnv* env, SkStreamRewindable* stream) {
+     SkImageDecoder* decoder = SkImageDecoder::Factory(stream);
+     int width, height;
+     if (NULL == decoder) {
+@@ -108,7 +107,7 @@ static jobject nativeNewInstanceFromByteArray(JNIEnv* env, jobject, jbyteArray b
+         For now we just always copy the array's data if isShareable.
+      */
+     AutoJavaByteArray ar(env, byteArray);
+-    SkStream* stream = new SkMemoryStream(ar.ptr() + offset, length, true);
++    SkStreamRewindable* stream = new SkMemoryStream(ar.ptr() + offset, length, true);
+ 
+     jobject brd = createBitmapRegionDecoder(env, stream);
+     SkSafeUnref(stream); // the decoder now holds a reference
+@@ -215,7 +214,7 @@ static jobject nativeDecodeRegion(JNIEnv* env, jobject, SkBitmapRegionDecoder *b
+     region.fRight = start_x + width;
+     region.fBottom = start_y + height;
+     SkBitmap* bitmap = NULL;
+-    SkTScopedPtr<SkBitmap> adb;
++    SkAutoTDelete<SkBitmap> adb;
+ 
+     if (tileBitmap != NULL) {
+         // Re-use bitmap.
+@@ -246,7 +245,7 @@ static jobject nativeDecodeRegion(JNIEnv* env, jobject, SkBitmapRegionDecoder *b
+     }
+ 
+     // detach bitmap from its autodeleter, since we want to own it now
+-    adb.release();
++    adb.detach();
+ 
+     JavaPixelAllocator* allocator = (JavaPixelAllocator*) decoder->getAllocator();
+     jbyteArray buff = allocator->getStorageObjAndReset();
+diff --git a/core/jni/android/graphics/Canvas.cpp b/core/jni/android/graphics/Canvas.cpp
+index 813dd5af1e286..edf3b4a052a4d 100644
+--- a/core/jni/android/graphics/Canvas.cpp
++++ b/core/jni/android/graphics/Canvas.cpp
+@@ -476,7 +476,7 @@ class SkCanvasGlue {
+                 if (paint) {
+                     filteredPaint = *paint;
+                 }
+-                filteredPaint.setFilterBitmap(true);
++                filteredPaint.setFilterLevel(SkPaint::kLow_FilterLevel);
+                 canvas->drawBitmap(*bitmap, left_, top_, &filteredPaint);
+             } else {
+                 canvas->drawBitmap(*bitmap, left_, top_, paint);
+@@ -491,7 +491,7 @@ class SkCanvasGlue {
+             if (paint) {
+                 filteredPaint = *paint;
+             }
+-            filteredPaint.setFilterBitmap(true);
++            filteredPaint.setFilterLevel(SkPaint::kLow_FilterLevel);
+ 
+             canvas->drawBitmap(*bitmap, 0, 0, &filteredPaint);
+ 
+@@ -514,7 +514,7 @@ class SkCanvasGlue {
+             if (paint) {
+                 filteredPaint = *paint;
+             }
+-            filteredPaint.setFilterBitmap(true);
++            filteredPaint.setFilterLevel(SkPaint::kLow_FilterLevel);
+             canvas->drawBitmapRect(*bitmap, srcPtr, dst, &filteredPaint);
+         } else {
+             canvas->drawBitmapRect(*bitmap, srcPtr, dst, paint);
+diff --git a/core/jni/android/graphics/Graphics.cpp b/core/jni/android/graphics/Graphics.cpp
+index 8cb152db06e31..3090ad2ff7112 100644
+--- a/core/jni/android/graphics/Graphics.cpp
++++ b/core/jni/android/graphics/Graphics.cpp
+@@ -346,6 +346,18 @@ SkRegion* GraphicsJNI::getNativeRegion(JNIEnv* env, jobject region)
+ 
+ ///////////////////////////////////////////////////////////////////////////////////////////
+ 
++// Assert that bitmap's SkAlphaType is consistent with isPremultiplied.
++static void assert_premultiplied(const SkBitmap& bitmap, bool isPremultiplied) {
++    // kOpaque_SkAlphaType and kIgnore_SkAlphaType mean that isPremultiplied is
++    // irrelevant. This just tests to ensure that the SkAlphaType is not
++    // opposite of isPremultiplied.
++    if (isPremultiplied) {
++        SkASSERT(bitmap.alphaType() != kUnpremul_SkAlphaType);
++    } else {
++        SkASSERT(bitmap.alphaType() != kPremul_SkAlphaType);
++    }
++}
++
+ jobject GraphicsJNI::createBitmap(JNIEnv* env, SkBitmap* bitmap, jbyteArray buffer,
+         int bitmapCreateFlags, jbyteArray ninepatch, jintArray layoutbounds, int density)
+ {
+@@ -354,6 +366,10 @@ jobject GraphicsJNI::createBitmap(JNIEnv* env, SkBitmap* bitmap, jbyteArray buff
+     bool isMutable = bitmapCreateFlags & kBitmapCreateFlag_Mutable;
+     bool isPremultiplied = bitmapCreateFlags & kBitmapCreateFlag_Premultiplied;
+ 
++    // The caller needs to have already set the alpha type properly, so the
++    // native SkBitmap stays in sync with the Java Bitmap.
++    assert_premultiplied(*bitmap, isPremultiplied);
++
+     jobject obj = env->NewObject(gBitmap_class, gBitmap_constructorMethodID,
+             static_cast<jint>(reinterpret_cast<uintptr_t>(bitmap)), buffer,
+             bitmap->width(), bitmap->height(), density, isMutable, isPremultiplied,
+@@ -371,6 +387,10 @@ jobject GraphicsJNI::createBitmap(JNIEnv* env, SkBitmap* bitmap, int bitmapCreat
+ void GraphicsJNI::reinitBitmap(JNIEnv* env, jobject javaBitmap, SkBitmap* bitmap,
+         bool isPremultiplied)
+ {
++    // The caller needs to have already set the alpha type properly, so the
++    // native SkBitmap stays in sync with the Java Bitmap.
++    assert_premultiplied(*bitmap, isPremultiplied);
++
+     env->CallVoidMethod(javaBitmap, gBitmap_reinitMethodID,
+             bitmap->width(), bitmap->height(), isPremultiplied);
+ }
+@@ -413,8 +433,9 @@ static JNIEnv* vm2env(JavaVM* vm)
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+-AndroidPixelRef::AndroidPixelRef(JNIEnv* env, void* storage, size_t size, jbyteArray storageObj,
+-        SkColorTable* ctable) : SkMallocPixelRef(storage, size, ctable, (storageObj == NULL)),
++AndroidPixelRef::AndroidPixelRef(JNIEnv* env, const SkImageInfo& info, void* storage,
++        size_t rowBytes, jbyteArray storageObj, SkColorTable* ctable) :
++        SkMallocPixelRef(info, storage, rowBytes, ctable, (storageObj == NULL)),
+         fWrappedPixelRef(NULL) {
+     SkASSERT(storage);
+     SkASSERT(env);
+@@ -429,13 +450,13 @@ AndroidPixelRef::AndroidPixelRef(JNIEnv* env, void* storage, size_t size, jbyteA
+ 
+     // If storageObj is NULL, the memory was NOT allocated on the Java heap
+     fOnJavaHeap = (storageObj != NULL);
+-
+ }
+ 
+-AndroidPixelRef::AndroidPixelRef(AndroidPixelRef& wrappedPixelRef, SkColorTable* ctable) :
+-        SkMallocPixelRef(wrappedPixelRef.getAddr(), wrappedPixelRef.getSize(), ctable, false),
++AndroidPixelRef::AndroidPixelRef(AndroidPixelRef& wrappedPixelRef, const SkImageInfo& info,
++        size_t rowBytes, SkColorTable* ctable) :
++        SkMallocPixelRef(info, wrappedPixelRef.getAddr(), rowBytes, ctable, false),
+         fWrappedPixelRef(wrappedPixelRef.fWrappedPixelRef ?
+-            wrappedPixelRef.fWrappedPixelRef : &wrappedPixelRef)
++                wrappedPixelRef.fWrappedPixelRef : &wrappedPixelRef)
+ {
+     SkASSERT(fWrappedPixelRef);
+     SkSafeRef(fWrappedPixelRef);
+@@ -540,13 +561,21 @@ jbyteArray GraphicsJNI::allocateJavaPixelRef(JNIEnv* env, SkBitmap* bitmap,
+         return NULL;
+     }
+ 
++    SkImageInfo bitmapInfo;
++    if (!bitmap->asImageInfo(&bitmapInfo)) {
++        jniThrowException(env, "java/lang/IllegalArgumentException",
++                "unknown bitmap configuration");
++        return NULL;
++    }
++
+     size_t size = size64.get32();
+     jbyteArray arrayObj = env->NewByteArray(size);
+     if (arrayObj) {
+         // TODO: make this work without jniGetNonMovableArrayElements
+         jbyte* addr = jniGetNonMovableArrayElements(&env->functions, arrayObj);
+         if (addr) {
+-            SkPixelRef* pr = new AndroidPixelRef(env, (void*) addr, size, arrayObj, ctable);
++            SkPixelRef* pr = new AndroidPixelRef(env, bitmapInfo, (void*) addr,
++                    bitmap->rowBytes(), arrayObj, ctable);
+             bitmap->setPixelRef(pr)->unref();
+             // since we're already allocated, we lockPixels right away
+             // HeapAllocator behaves this way too
+diff --git a/core/jni/android/graphics/GraphicsJNI.h b/core/jni/android/graphics/GraphicsJNI.h
+index f4590b956d78a..cb154aaf28e58 100644
+--- a/core/jni/android/graphics/GraphicsJNI.h
++++ b/core/jni/android/graphics/GraphicsJNI.h
+@@ -57,6 +57,7 @@ class GraphicsJNI {
+ 
+     /** Create a java Bitmap object given the native bitmap (required) and optional
+         storage array (may be null).
++        bitmap's SkAlphaType must already be in sync with bitmapCreateFlags.
+     */
+     static jobject createBitmap(JNIEnv* env, SkBitmap* bitmap, jbyteArray buffer,
+             int bitmapCreateFlags, jbyteArray ninepatch, jintArray layoutbounds, int density = -1);
+@@ -64,6 +65,9 @@ class GraphicsJNI {
+     static jobject createBitmap(JNIEnv* env, SkBitmap* bitmap, int bitmapCreateFlags,
+             jbyteArray ninepatch, int density = -1);
+ 
++    /** Reinitialize a bitmap. bitmap must already have its SkAlphaType set in
++        sync with isPremultiplied
++    */
+     static void reinitBitmap(JNIEnv* env, jobject javaBitmap, SkBitmap* bitmap,
+             bool isPremultiplied);
+ 
+@@ -88,15 +92,16 @@ class GraphicsJNI {
+ 
+ class AndroidPixelRef : public SkMallocPixelRef {
+ public:
+-    AndroidPixelRef(JNIEnv* env, void* storage, size_t size, jbyteArray storageObj,
+-                    SkColorTable* ctable);
++    AndroidPixelRef(JNIEnv* env, const SkImageInfo& info, void* storage, size_t rowBytes,
++            jbyteArray storageObj, SkColorTable* ctable);
+ 
+     /**
+      * Creates an AndroidPixelRef that wraps (and refs) another to reuse/share
+      * the same storage and java byte array refcounting, yet have a different
+      * color table.
+      */
+-    AndroidPixelRef(AndroidPixelRef& wrappedPixelRef, SkColorTable* ctable);
++    AndroidPixelRef(AndroidPixelRef& wrappedPixelRef, const SkImageInfo& info,
++            size_t rowBytes, SkColorTable* ctable);
+ 
+     virtual ~AndroidPixelRef();
+ 
+diff --git a/core/jni/android/graphics/Movie.cpp b/core/jni/android/graphics/Movie.cpp
+index feb2decd3528c..55be7c194f12d 100644
+--- a/core/jni/android/graphics/Movie.cpp
++++ b/core/jni/android/graphics/Movie.cpp
+@@ -85,7 +85,9 @@ static void movie_draw(JNIEnv* env, jobject movie, jobject canvas,
+ static jobject movie_decodeAsset(JNIEnv* env, jobject clazz, jint native_asset) {
+     android::Asset* asset = reinterpret_cast<android::Asset*>(native_asset);
+     if (asset == NULL) return NULL;
+-    SkAutoTUnref<SkStreamRewindable> stream (new android::AssetStreamAdaptor(asset));
++    SkAutoTUnref<SkStreamRewindable> stream (new android::AssetStreamAdaptor(asset,
++            android::AssetStreamAdaptor::kNo_OwnAsset,
++            android::AssetStreamAdaptor::kNo_HasMemoryBase));
+     SkMovie* moov = SkMovie::DecodeStream(stream.get());
+     return create_jmovie(env, moov);
+ }
+diff --git a/core/jni/android/graphics/NinePatchPeeker.cpp b/core/jni/android/graphics/NinePatchPeeker.cpp
+index df996afd0bf70..d3482da34fa29 100644
+--- a/core/jni/android/graphics/NinePatchPeeker.cpp
++++ b/core/jni/android/graphics/NinePatchPeeker.cpp
+@@ -40,15 +40,14 @@ bool NinePatchPeeker::peek(const char tag[], const void* data, size_t length) {
+         // now update our host to force index or 32bit config
+         // 'cause we don't want 565 predithered, since as a 9patch, we know
+         // we will be stretched, and therefore we want to dither afterwards.
+-        static const SkBitmap::Config gNo565Pref[] = {
+-            SkBitmap::kIndex8_Config,
+-            SkBitmap::kIndex8_Config,
+-            SkBitmap::kARGB_8888_Config,
+-            SkBitmap::kARGB_8888_Config,
+-            SkBitmap::kARGB_8888_Config,
+-            SkBitmap::kARGB_8888_Config,
+-        };
+-        fHost->setPrefConfigTable(gNo565Pref);
++        SkImageDecoder::PrefConfigTable table;
++        table.fPrefFor_8Index_NoAlpha_src   = SkBitmap::kIndex8_Config;
++        table.fPrefFor_8Index_YesAlpha_src  = SkBitmap::kIndex8_Config;
++        table.fPrefFor_8Gray_src            = SkBitmap::kARGB_8888_Config;
++        table.fPrefFor_8bpc_NoAlpha_src     = SkBitmap::kARGB_8888_Config;
++        table.fPrefFor_8bpc_YesAlpha_src    = SkBitmap::kARGB_8888_Config;
++
++        fHost->setPrefConfigTable(table);
+     } else if (strcmp("npLb", tag) == 0 && length == sizeof(int) * 4) {
+         fLayoutBounds = new int[4];
+         memcpy(fLayoutBounds, data, sizeof(int) * 4);
+diff --git a/core/jni/android/graphics/Paint.cpp b/core/jni/android/graphics/Paint.cpp
+index 40e0731cbee47..4f6cc37aaa0ea 100644
+--- a/core/jni/android/graphics/Paint.cpp
++++ b/core/jni/android/graphics/Paint.cpp
+@@ -148,7 +148,8 @@ class SkPaintGlue {
+ 
+     static void setFilterBitmap(JNIEnv* env, jobject paint, jboolean filterBitmap) {
+         NPE_CHECK_RETURN_VOID(env, paint);
+-        GraphicsJNI::getNativePaint(env, paint)->setFilterBitmap(filterBitmap);
++        GraphicsJNI::getNativePaint(env, paint)->setFilterLevel(
++                filterBitmap ? SkPaint::kLow_FilterLevel : SkPaint::kNone_FilterLevel);
+     }
+ 
+     static void setDither(JNIEnv* env, jobject paint, jboolean dither) {
+diff --git a/core/jni/android/graphics/Region.cpp b/core/jni/android/graphics/Region.cpp
+index ded21860b8b97..f0a7baf8cb040 100644
+--- a/core/jni/android/graphics/Region.cpp
++++ b/core/jni/android/graphics/Region.cpp
+@@ -177,7 +177,7 @@ static SkRegion* Region_createFromParcel(JNIEnv* env, jobject clazz, jobject par
+ 
+     SkRegion* region = new SkRegion;
+     size_t size = p->readInt32();
+-    region->readFromMemory(p->readInplace(size));
++    region->readFromMemory(p->readInplace(size), size);
+ 
+     return region;
+ }
+diff --git a/core/jni/android/graphics/TextLayoutCache.cpp b/core/jni/android/graphics/TextLayoutCache.cpp
+index 92d253f0458e6..144ac3990cd2f 100644
+--- a/core/jni/android/graphics/TextLayoutCache.cpp
++++ b/core/jni/android/graphics/TextLayoutCache.cpp
+@@ -20,6 +20,7 @@
+ 
+ #include "TextLayoutCache.h"
+ #include "TextLayout.h"
++#include "SkGlyphCache.h"
+ #include "SkTypeface_android.h"
+ #include "HarfBuzzNGFaceSkia.h"
+ #include <unicode/unistr.h>
+@@ -757,8 +758,8 @@ void TextLayoutShaper::computeRunValues(const SkPaint* paint, const UChar* conte
+             outPos->add(ypos);
+             totalAdvance += xAdvance;
+ 
+-            // TODO: consider using glyph cache
+-            const SkGlyph& metrics = mShapingPaint.getGlyphMetrics(glyphId, NULL);
++            SkAutoGlyphCache autoCache(mShapingPaint, NULL, NULL);
++            const SkGlyph& metrics = autoCache.getCache()->getGlyphIDMetrics(glyphId);
+             outBounds->join(xpos + metrics.fLeft, ypos + metrics.fTop,
+                     xpos + metrics.fLeft + metrics.fWidth, ypos + metrics.fTop + metrics.fHeight);
+ 
+diff --git a/core/jni/android/graphics/Typeface.cpp b/core/jni/android/graphics/Typeface.cpp
+index ccd75d565ae58..d10a960049f1d 100644
+--- a/core/jni/android/graphics/Typeface.cpp
++++ b/core/jni/android/graphics/Typeface.cpp
+@@ -4,6 +4,7 @@
+ #include "GraphicsJNI.h"
+ #include "SkStream.h"
+ #include "SkTypeface.h"
++#include "Utils.h"
+ #include <android_runtime/android_util_AssetManager.h>
+ #include <androidfw/AssetManager.h>
+ 
+@@ -73,65 +74,6 @@ static int Typeface_getStyle(JNIEnv* env, jobject obj, SkTypeface* face) {
+     return face->style();
+ }
+ 
+-class AssetStream : public SkStream {
+-public:
+-    AssetStream(Asset* asset, bool hasMemoryBase) : fAsset(asset)
+-    {
+-        fMemoryBase = hasMemoryBase ? fAsset->getBuffer(false) : NULL;
+-    }
+-
+-    virtual ~AssetStream()
+-    {
+-        delete fAsset;
+-    }
+-
+-    virtual const void* getMemoryBase()
+-    {
+-        return fMemoryBase;
+-    }
+-
+-	virtual bool rewind()
+-    {
+-        off64_t pos = fAsset->seek(0, SEEK_SET);
+-        return pos != (off64_t)-1;
+-    }
+-
+-	virtual size_t read(void* buffer, size_t size)
+-    {
+-        ssize_t amount;
+-
+-        if (NULL == buffer)
+-        {
+-            if (0 == size)  // caller is asking us for our total length
+-                return fAsset->getLength();
+-
+-            // asset->seek returns new total offset
+-            // we want to return amount that was skipped
+-
+-            off64_t oldOffset = fAsset->seek(0, SEEK_CUR);
+-            if (-1 == oldOffset)
+-                return 0;
+-            off64_t newOffset = fAsset->seek(size, SEEK_CUR);
+-            if (-1 == newOffset)
+-                return 0;
+-
+-            amount = newOffset - oldOffset;
+-        }
+-        else
+-        {
+-            amount = fAsset->read(buffer, size);
+-        }
+-
+-        if (amount < 0)
+-            amount = 0;
+-        return amount;
+-    }
+-
+-private:
+-    Asset*      fAsset;
+-    const void* fMemoryBase;
+-};
+-
+ static SkTypeface* Typeface_createFromAsset(JNIEnv* env, jobject,
+                                             jobject jassetMgr,
+                                             jstring jpath) {
+@@ -150,7 +92,9 @@ static SkTypeface* Typeface_createFromAsset(JNIEnv* env, jobject,
+         return NULL;
+     }
+ 
+-    SkStream* stream = new AssetStream(asset, true);
++    SkStream* stream = new AssetStreamAdaptor(asset,
++                                              AssetStreamAdaptor::kYes_OwnAsset,
++                                              AssetStreamAdaptor::kYes_HasMemoryBase);
+     SkTypeface* face = SkTypeface::CreateFromStream(stream);
+     // SkTypeFace::CreateFromStream calls ref() on the stream, so we
+     // need to unref it here or it won't be freed later on
+diff --git a/core/jni/android/graphics/Utils.cpp b/core/jni/android/graphics/Utils.cpp
+index b7d1f3ab220fd..eb416cbe7ad2c 100644
+--- a/core/jni/android/graphics/Utils.cpp
++++ b/core/jni/android/graphics/Utils.cpp
+@@ -19,6 +19,21 @@
+ 
+ using namespace android;
+ 
++AssetStreamAdaptor::AssetStreamAdaptor(Asset* asset, OwnAsset ownAsset,
++                                       HasMemoryBase hasMemoryBase)
++    : fAsset(asset)
++    , fMemoryBase(kYes_HasMemoryBase == hasMemoryBase ?
++                  asset->getBuffer(false) : NULL)
++    , fOwnAsset(ownAsset)
++{
++}
++
++AssetStreamAdaptor::~AssetStreamAdaptor() {
++    if (kYes_OwnAsset == fOwnAsset) {
++        delete fAsset;
++    }
++}
++
+ bool AssetStreamAdaptor::rewind() {
+     off64_t pos = fAsset->seek(0, SEEK_SET);
+     if (pos == (off64_t)-1) {
+diff --git a/core/jni/android/graphics/Utils.h b/core/jni/android/graphics/Utils.h
+index a1ac72a0b92bf..b90593cdc4b09 100644
+--- a/core/jni/android/graphics/Utils.h
++++ b/core/jni/android/graphics/Utils.h
+@@ -28,16 +28,36 @@ namespace android {
+ 
+ class AssetStreamAdaptor : public SkStreamRewindable {
+ public:
+-    AssetStreamAdaptor(Asset* a) : fAsset(a) {}
++    // Enum passed to constructor. If set to kYes_OwnAsset,
++    // the passed in Asset will be deleted upon destruction.
++    enum OwnAsset {
++        kYes_OwnAsset,
++        kNo_OwnAsset,
++    };
++
++    // Enum passed to constructor. If set to kYes_HasMemoryBase,
++    // getMemoryBase will return the Asset's buffer.
++    enum HasMemoryBase {
++        kYes_HasMemoryBase,
++        kNo_HasMemoryBase,
++    };
++
++    AssetStreamAdaptor(Asset*, OwnAsset, HasMemoryBase);
++    ~AssetStreamAdaptor();
++
+     virtual bool rewind();
+     virtual size_t read(void* buffer, size_t size);
+     virtual bool hasLength() const { return true; }
+     virtual size_t getLength() const;
+     virtual bool isAtEnd() const;
+ 
++    virtual const void* getMemoryBase() { return fMemoryBase; }
++
+     virtual SkStreamRewindable* duplicate() const;
+ private:
+-    Asset*  fAsset;
++    Asset*              fAsset;
++    const void* const   fMemoryBase;
++    const OwnAsset      fOwnAsset;
+ };
+ 
+ /**
+diff --git a/core/jni/android/opengl/util.cpp b/core/jni/android/opengl/util.cpp
+index 44af1993dc3d2..4bb091d1ab6e4 100644
+--- a/core/jni/android/opengl/util.cpp
++++ b/core/jni/android/opengl/util.cpp
+@@ -632,7 +632,7 @@ static jint util_getInternalFormat(JNIEnv *env, jclass clazz,
+     SkBitmap const * nativeBitmap =
+             (SkBitmap const *)env->GetIntField(jbitmap, nativeBitmapID);
+     const SkBitmap& bitmap(*nativeBitmap);
+-    SkBitmap::Config config = bitmap.getConfig();
++    SkBitmap::Config config = bitmap.config();
+     return getInternalFormat(config);
+ }
+ 
+@@ -642,7 +642,7 @@ static jint util_getType(JNIEnv *env, jclass clazz,
+     SkBitmap const * nativeBitmap =
+             (SkBitmap const *)env->GetIntField(jbitmap, nativeBitmapID);
+     const SkBitmap& bitmap(*nativeBitmap);
+-    SkBitmap::Config config = bitmap.getConfig();
++    SkBitmap::Config config = bitmap.config();
+     return getType(config);
+ }
+ 
+@@ -653,7 +653,7 @@ static jint util_texImage2D(JNIEnv *env, jclass clazz,
+     SkBitmap const * nativeBitmap =
+             (SkBitmap const *)env->GetIntField(jbitmap, nativeBitmapID);
+     const SkBitmap& bitmap(*nativeBitmap);
+-    SkBitmap::Config config = bitmap.getConfig();
++    SkBitmap::Config config = bitmap.config();
+     if (internalformat < 0) {
+         internalformat = getInternalFormat(config);
+     }
+@@ -681,7 +681,7 @@ static jint util_texImage2D(JNIEnv *env, jclass clazz,
+             SkColorTable* ctable = bitmap.getColorTable();
+             memcpy(data, ctable->lockColors(), ctable->count() * sizeof(SkPMColor));
+             memcpy(pixels, p, size);
+-            ctable->unlockColors(false);
++            ctable->unlockColors();
+             glCompressedTexImage2D(target, level, internalformat, w, h, border, imageSize, data);
+             free(data);
+         } else {
+@@ -702,7 +702,7 @@ static jint util_texSubImage2D(JNIEnv *env, jclass clazz,
+     SkBitmap const * nativeBitmap =
+             (SkBitmap const *)env->GetIntField(jbitmap, nativeBitmapID);
+     const SkBitmap& bitmap(*nativeBitmap);
+-    SkBitmap::Config config = bitmap.getConfig();
++    SkBitmap::Config config = bitmap.config();
+     if (format < 0) {
+         format = getInternalFormat(config);
+         if (format == GL_PALETTE8_RGBA8_OES)
+diff --git a/core/jni/android_view_Surface.cpp b/core/jni/android_view_Surface.cpp
+index 1868469f8ebb6..dd178d8297f34 100644
+--- a/core/jni/android_view_Surface.cpp
++++ b/core/jni/android_view_Surface.cpp
+@@ -39,6 +39,7 @@
+ 
+ #include <SkCanvas.h>
+ #include <SkBitmap.h>
++#include <SkImage.h>
+ #include <SkRegion.h>
+ 
+ #include <utils/misc.h>
+@@ -178,7 +179,8 @@ static jboolean nativeIsConsumerRunningBehind(JNIEnv* env, jclass clazz, jint na
+ static inline SkBitmap::Config convertPixelFormat(PixelFormat format) {
+     /* note: if PIXEL_FORMAT_RGBX_8888 means that all alpha bytes are 0xFF, then
+         we can map to SkBitmap::kARGB_8888_Config, and optionally call
+-        bitmap.setIsOpaque(true) on the resulting SkBitmap (as an accelerator)
++        bitmap.setAlphaType(kOpaque_SkAlphaType) on the resulting SkBitmap
++        (as an accelerator)
+     */
+     switch (format) {
+     case PIXEL_FORMAT_RGBX_8888:    return SkBitmap::kARGB_8888_Config;
+@@ -234,7 +236,7 @@ static jint nativeLockCanvas(JNIEnv* env, jclass clazz,
+     ssize_t bpr = outBuffer.stride * bytesPerPixel(outBuffer.format);
+     bitmap.setConfig(convertPixelFormat(outBuffer.format), outBuffer.width, outBuffer.height, bpr);
+     if (outBuffer.format == PIXEL_FORMAT_RGBX_8888) {
+-        bitmap.setIsOpaque(true);
++        bitmap.setAlphaType(kOpaque_SkAlphaType);
+     }
+     if (outBuffer.width > 0 && outBuffer.height > 0) {
+         bitmap.setPixels(outBuffer.bits);
+diff --git a/core/jni/android_view_SurfaceControl.cpp b/core/jni/android_view_SurfaceControl.cpp
+index 67eade83cdc4b..b8d3c20fd899f 100644
+--- a/core/jni/android_view_SurfaceControl.cpp
++++ b/core/jni/android_view_SurfaceControl.cpp
+@@ -61,51 +61,21 @@ static struct {
+ 
+ class ScreenshotPixelRef : public SkPixelRef {
+ public:
+-    ScreenshotPixelRef(SkColorTable* ctable) {
+-        fCTable = ctable;
+-        SkSafeRef(ctable);
++    ScreenshotPixelRef(const SkImageInfo& info, ScreenshotClient* screenshot) :
++      SkPixelRef(info),
++      mScreenshot(screenshot) {
+         setImmutable();
+     }
+ 
+     virtual ~ScreenshotPixelRef() {
+-        SkSafeUnref(fCTable);
+-    }
+-
+-    status_t update(const sp<IBinder>& display, int width, int height,
+-            int minLayer, int maxLayer, bool allLayers) {
+-        status_t res = (width > 0 && height > 0)
+-                ? (allLayers
+-                        ? mScreenshot.update(display, width, height)
+-                        : mScreenshot.update(display, width, height, minLayer, maxLayer))
+-                : mScreenshot.update(display);
+-        if (res != NO_ERROR) {
+-            return res;
+-        }
+-
+-        return NO_ERROR;
+-    }
+-
+-    uint32_t getWidth() const {
+-        return mScreenshot.getWidth();
+-    }
+-
+-    uint32_t getHeight() const {
+-        return mScreenshot.getHeight();
+-    }
+-
+-    uint32_t getStride() const {
+-        return mScreenshot.getStride();
+-    }
+-
+-    uint32_t getFormat() const {
+-        return mScreenshot.getFormat();
++        delete mScreenshot;
+     }
+ 
+ protected:
+     // overrides from SkPixelRef
+     virtual void* onLockPixels(SkColorTable** ct) {
+-        *ct = fCTable;
+-        return (void*)mScreenshot.getPixels();
++        *ct = NULL;
++        return (void*)mScreenshot->getPixels();
+     }
+ 
+     virtual void onUnlockPixels() {
+@@ -113,8 +83,7 @@ class ScreenshotPixelRef : public SkPixelRef {
+ 
+     SK_DECLARE_UNFLATTENABLE_OBJECT()
+ private:
+-    ScreenshotClient mScreenshot;
+-    SkColorTable*    fCTable;
++    ScreenshotClient* mScreenshot;
+ 
+     typedef SkPixelRef INHERITED;
+ };
+@@ -147,19 +116,6 @@ static void nativeDestroy(JNIEnv* env, jclass clazz, jint nativeObject) {
+     ctrl->decStrong((void *)nativeCreate);
+ }
+ 
+-static inline SkBitmap::Config convertPixelFormat(PixelFormat format) {
+-    /* note: if PIXEL_FORMAT_RGBX_8888 means that all alpha bytes are 0xFF, then
+-        we can map to SkBitmap::kARGB_8888_Config, and optionally call
+-        bitmap.setIsOpaque(true) on the resulting SkBitmap (as an accelerator)
+-    */
+-    switch (format) {
+-    case PIXEL_FORMAT_RGBX_8888:    return SkBitmap::kARGB_8888_Config;
+-    case PIXEL_FORMAT_RGBA_8888:    return SkBitmap::kARGB_8888_Config;
+-    case PIXEL_FORMAT_RGB_565:      return SkBitmap::kRGB_565_Config;
+-    default:                        return SkBitmap::kNo_Config;
+-    }
+-}
+-
+ static jobject nativeScreenshotBitmap(JNIEnv* env, jclass clazz, jobject displayTokenObj,
+         jint width, jint height, jint minLayer, jint maxLayer, bool allLayers) {
+     sp<IBinder> displayToken = ibinderForJavaObject(env, displayTokenObj);
+@@ -167,26 +123,50 @@ static jobject nativeScreenshotBitmap(JNIEnv* env, jclass clazz, jobject display
+         return NULL;
+     }
+ 
+-    ScreenshotPixelRef* pixels = new ScreenshotPixelRef(NULL);
+-    if (pixels->update(displayToken, width, height,
+-            minLayer, maxLayer, allLayers) != NO_ERROR) {
+-        delete pixels;
++    ScreenshotClient* screenshot = new ScreenshotClient();
++    status_t res = (width > 0 && height > 0)
++            ? (allLayers
++                    ? screenshot->update(displayToken, width, height)
++                    : screenshot->update(displayToken, width, height, minLayer, maxLayer))
++            : screenshot->update(displayToken);
++    if (res != NO_ERROR) {
++        delete screenshot;
+         return NULL;
+     }
+ 
+-    uint32_t w = pixels->getWidth();
+-    uint32_t h = pixels->getHeight();
+-    uint32_t s = pixels->getStride();
+-    uint32_t f = pixels->getFormat();
+-    ssize_t bpr = s * android::bytesPerPixel(f);
++    SkImageInfo screenshotInfo;
++    screenshotInfo.fWidth = screenshot->getWidth();
++    screenshotInfo.fHeight = screenshot->getHeight();
+ 
+-    SkBitmap* bitmap = new SkBitmap();
+-    bitmap->setConfig(convertPixelFormat(f), w, h, bpr);
+-    if (f == PIXEL_FORMAT_RGBX_8888) {
+-        bitmap->setIsOpaque(true);
++    switch (screenshot->getFormat()) {
++        case PIXEL_FORMAT_RGBX_8888: {
++            screenshotInfo.fColorType = kRGBA_8888_SkColorType;
++            screenshotInfo.fAlphaType = kIgnore_SkAlphaType;
++            break;
++        }
++        case PIXEL_FORMAT_RGBA_8888: {
++            screenshotInfo.fColorType = kRGBA_8888_SkColorType;
++            screenshotInfo.fAlphaType = kPremul_SkAlphaType;
++            break;
++        }
++        case PIXEL_FORMAT_RGB_565: {
++            screenshotInfo.fColorType = kRGB_565_SkColorType;
++            screenshotInfo.fAlphaType = kIgnore_SkAlphaType;
++            break;
++        }
++        default: {
++            delete screenshot;
++            return NULL;
++        }
+     }
+ 
+-    if (w > 0 && h > 0) {
++    // takes ownership of ScreenshotClient
++    ScreenshotPixelRef* pixels = new ScreenshotPixelRef(screenshotInfo, screenshot);
++    ssize_t rowBytes = screenshot->getStride() * android::bytesPerPixel(screenshot->getFormat());
++
++    SkBitmap* bitmap = new SkBitmap();
++    bitmap->setConfig(screenshotInfo, rowBytes);
++    if (screenshotInfo.fWidth > 0 && screenshotInfo.fHeight > 0) {
+         bitmap->setPixelRef(pixels)->unref();
+         bitmap->lockPixels();
+     } else {
+diff --git a/core/jni/android_view_TextureView.cpp b/core/jni/android_view_TextureView.cpp
+index 0f4290059b89b..7a4a20a97cab3 100644
+--- a/core/jni/android_view_TextureView.cpp
++++ b/core/jni/android_view_TextureView.cpp
+@@ -27,6 +27,7 @@
+ 
+ #include <SkBitmap.h>
+ #include <SkCanvas.h>
++#include <SkImage.h>
+ 
+ namespace android {
+ 
+@@ -156,7 +157,7 @@ static jboolean android_view_TextureView_lockCanvas(JNIEnv* env, jobject,
+     bitmap.setConfig(convertPixelFormat(buffer.format), buffer.width, buffer.height, bytesCount);
+ 
+     if (buffer.format == WINDOW_FORMAT_RGBX_8888) {
+-        bitmap.setIsOpaque(true);
++        bitmap.setAlphaType(kOpaque_SkAlphaType);
+     }
+ 
+     if (buffer.width > 0 && buffer.height > 0) {
+diff --git a/graphics/java/android/graphics/Bitmap.java b/graphics/java/android/graphics/Bitmap.java
+index 8c38d25d94e84..266241f380b8c 100644
+--- a/graphics/java/android/graphics/Bitmap.java
++++ b/graphics/java/android/graphics/Bitmap.java
+@@ -67,6 +67,16 @@
+      * setPremultiplied() aren't order dependent, despite being setters.
+      */
+     private boolean mIsPremultiplied;
++
++    /**
++     * Whether the Bitmap's content is expected to have alpha. Note that hasAlpha()
++     * does not directly return this value, because hasAlpha() may never return true
++     * for a 565 Bitmap.
++     *
++     * Any time this or mIsPremultiplied is changed, both are passed to native so they
++     * are not order dependent.
++     */
++    private boolean mHasAlpha;
+     private byte[] mNinePatchChunk;   // may be null
+     private int[] mLayoutBounds;   // may be null
+     private int mWidth;
+@@ -390,7 +400,7 @@ private static void checkWidthHeight(int width, int height) {
+          * No color information is stored.
+          * With this configuration, each pixel requires 1 byte of memory.
+          */
+-        ALPHA_8     (2),
++        ALPHA_8     (1),
+ 
+         /**
+          * Each pixel is stored on 2 bytes and only the RGB channels are
+@@ -406,7 +416,7 @@ private static void checkWidthHeight(int width, int height) {
+          * This configuration may be useful when using opaque bitmaps
+          * that do not require high color fidelity.
+          */
+-        RGB_565     (4),
++        RGB_565     (3),
+ 
+         /**
+          * Each pixel is stored on 2 bytes. The three RGB color channels
+@@ -428,7 +438,7 @@ private static void checkWidthHeight(int width, int height) {
+          *             it is advised to use {@link #ARGB_8888} instead.
+          */
+         @Deprecated
+-        ARGB_4444   (5),
++        ARGB_4444   (4),
+ 
+         /**
+          * Each pixel is stored on 4 bytes. Each channel (RGB and alpha
+@@ -438,13 +448,13 @@ private static void checkWidthHeight(int width, int height) {
+          * This configuration is very flexible and offers the best
+          * quality. It should be used whenever possible.
+          */
+-        ARGB_8888   (6);
++        ARGB_8888   (5);
+ 
+         final int nativeInt;
+ 
+         @SuppressWarnings({"deprecation"})
+         private static Config sConfigs[] = {
+-            null, null, ALPHA_8, null, RGB_565, ARGB_4444, ARGB_8888
++            null, ALPHA_8, null, RGB_565, ARGB_4444, ARGB_8888
+         };
+         
+         Config(int ni) {
+@@ -554,7 +564,7 @@ public Bitmap copy(Config config, boolean isMutable) {
+         checkRecycled("Can't copy a recycled bitmap");
+         Bitmap b = nativeCopy(mNativeBitmap, config.nativeInt, isMutable);
+         if (b != null) {
+-            b.mIsPremultiplied = mIsPremultiplied;
++            b.setAlphaAndPremultiplied(mHasAlpha, mIsPremultiplied);
+             b.mDensity = mDensity;
+         }
+         return b;
+@@ -727,12 +737,12 @@ public static Bitmap createBitmap(Bitmap source, int x, int y, int width, int he
+                 paint.setAntiAlias(true);
+             }
+         }
+-        
++
+         // The new bitmap was created from a known bitmap source so assume that
+         // they use the same density
+         bitmap.mDensity = source.mDensity;
+-        bitmap.mIsPremultiplied = source.mIsPremultiplied;
+-        
++        bitmap.setAlphaAndPremultiplied(source.mHasAlpha, source.mIsPremultiplied);
++
+         canvas.setBitmap(bitmap);
+         canvas.drawBitmap(source, srcR, dstR, paint);
+         canvas.setBitmap(null);
+@@ -810,9 +820,9 @@ private static Bitmap createBitmap(DisplayMetrics display, int width, int height
+         if (display != null) {
+             bm.mDensity = display.densityDpi;
+         }
++        bm.setHasAlpha(hasAlpha);
+         if (config == Config.ARGB_8888 && !hasAlpha) {
+             nativeErase(bm.mNativeBitmap, 0xff000000);
+-            nativeSetHasAlpha(bm.mNativeBitmap, hasAlpha);
+         }
+         // No need to initialize the bitmap to zeroes with other configs;
+         // it is backed by a VM byte array which is by definition preinitialized
+@@ -884,6 +894,7 @@ public static Bitmap createBitmap(DisplayMetrics display, int colors[],
+         if (display != null) {
+             bm.mDensity = display.densityDpi;
+         }
++        bm.mHasAlpha = true;
+         return bm;
+     }
+ 
+@@ -1041,11 +1052,24 @@ public final boolean isPremultiplied() {
+      * <p>This method will not affect the behavior of a bitmap without an alpha
+      * channel, or if {@link #hasAlpha()} returns false.</p>
+      *
++     * <p>Calling {@link createBitmap()} or {@link createScaledBitmap()} with a source
++     * Bitmap whose colors are not pre-multiplied may result in a RuntimeException,
++     * since those functions require drawing the source, which is not supported for
++     * un-pre-multiplied Bitmaps.</p>
++     *
+      * @see Bitmap#isPremultiplied()
+      * @see BitmapFactory.Options#inPremultiplied
+      */
+     public final void setPremultiplied(boolean premultiplied) {
+         mIsPremultiplied = premultiplied;
++        nativeSetAlphaAndPremultiplied(mNativeBitmap, mHasAlpha, premultiplied);
++    }
++
++    /** Helper function to set both alpha and premultiplied. **/
++    private final void setAlphaAndPremultiplied(boolean hasAlpha, boolean premultiplied) {
++        mHasAlpha = hasAlpha;
++        mIsPremultiplied = premultiplied;
++        nativeSetAlphaAndPremultiplied(mNativeBitmap, hasAlpha, premultiplied);
+     }
+ 
+     /** Returns the bitmap's width */
+@@ -1206,7 +1230,8 @@ public final boolean hasAlpha() {
+      * non-opaque per-pixel alpha values.
+      */
+     public void setHasAlpha(boolean hasAlpha) {
+-        nativeSetHasAlpha(mNativeBitmap, hasAlpha);
++        mHasAlpha = hasAlpha;
++        nativeSetAlphaAndPremultiplied(mNativeBitmap, hasAlpha, mIsPremultiplied);
+     }
+ 
+     /**
+@@ -1611,7 +1636,8 @@ private static native Bitmap nativeExtractAlpha(int nativeBitmap,
+ 
+     private static native void nativePrepareToDraw(int nativeBitmap);
+     private static native boolean nativeHasAlpha(int nativeBitmap);
+-    private static native void nativeSetHasAlpha(int nBitmap, boolean hasAlpha);
++    private static native void nativeSetAlphaAndPremultiplied(int nBitmap, boolean hasAlpha,
++                                                              boolean isPremul);
+     private static native boolean nativeHasMipMap(int nativeBitmap);
+     private static native void nativeSetHasMipMap(int nBitmap, boolean hasMipMap);
+     private static native boolean nativeSameAs(int nb0, int nb1);
+diff --git a/graphics/java/android/graphics/BitmapFactory.java b/graphics/java/android/graphics/BitmapFactory.java
+index b08ce0974abe0..9b07da98278aa 100644
+--- a/graphics/java/android/graphics/BitmapFactory.java
++++ b/graphics/java/android/graphics/BitmapFactory.java
+@@ -153,8 +153,12 @@ public Options() {
+          *
+          * <p>This does not affect bitmaps without an alpha channel.</p>
+          *
++         * <p>Setting this flag to false while setting {@link #inScaled} to true
++         * may result in incorrect colors.</p>
++         *
+          * @see Bitmap#hasAlpha()
+          * @see Bitmap#isPremultiplied()
++         * @see #inScaled
+          */
+         public boolean inPremultiplied;
+ 
+@@ -249,6 +253,9 @@ public Options() {
+          * <p>This flag is turned on by default and should be turned off if you need
+          * a non-scaled version of the bitmap.  Nine-patch bitmaps ignore this
+          * flag and are always scaled.
++         *
++         * <p>If {@link #inPremultiplied} is set to false, and the image has alpha,
++         * setting this flag to true may result in incorrect colors.
+          */
+         public boolean inScaled;
+ 
+diff --git a/libs/hwui/TextureCache.cpp b/libs/hwui/TextureCache.cpp
+index ed0a79aac56a5..8d0874f3e03b8 100644
+--- a/libs/hwui/TextureCache.cpp
++++ b/libs/hwui/TextureCache.cpp
+@@ -285,10 +285,9 @@ void TextureCache::generateTexture(SkBitmap* bitmap, Texture* texture, bool rege
+ void TextureCache::uploadLoFiTexture(bool resize, SkBitmap* bitmap,
+         uint32_t width, uint32_t height) {
+     SkBitmap rgbaBitmap;
+-    rgbaBitmap.setConfig(SkBitmap::kARGB_8888_Config, width, height);
++    rgbaBitmap.setConfig(SkBitmap::kARGB_8888_Config, width, height, 0, bitmap->alphaType());
+     rgbaBitmap.allocPixels();
+     rgbaBitmap.eraseColor(0);
+-    rgbaBitmap.setIsOpaque(bitmap->isOpaque());
+ 
+     SkCanvas canvas(rgbaBitmap);
+     canvas.drawBitmap(*bitmap, 0.0f, 0.0f, NULL);
+diff --git a/libs/hwui/font/Font.cpp b/libs/hwui/font/Font.cpp
+index 18983d8b6d32a..12a9c235c938e 100644
+--- a/libs/hwui/font/Font.cpp
++++ b/libs/hwui/font/Font.cpp
+@@ -23,6 +23,7 @@
+ #include <utils/Trace.h>
+ 
+ #include <SkGlyph.h>
++#include <SkGlyphCache.h>
+ #include <SkUtils.h>
+ 
+ #include "FontUtil.h"
+@@ -271,9 +272,9 @@ CachedGlyphInfo* Font::getCachedGlyph(SkPaint* paint, glyph_t textUnit, bool pre
+     if (cachedGlyph) {
+         // Is the glyph still in texture cache?
+         if (!cachedGlyph->mIsValid) {
+-            const SkGlyph& skiaGlyph = GET_METRICS(paint, textUnit,
+-                    &mDescription.mLookupTransform);
+-            updateGlyphCache(paint, skiaGlyph, cachedGlyph, precaching);
++            SkAutoGlyphCache autoCache(*paint, NULL, &mDescription.mLookupTransform);
++            const SkGlyph& skiaGlyph = GET_METRICS(autoCache.getCache(), textUnit);
++            updateGlyphCache(paint, skiaGlyph, autoCache.getCache(), cachedGlyph, precaching);
+         }
+     } else {
+         cachedGlyph = cacheGlyph(paint, textUnit, precaching);
+@@ -415,8 +416,8 @@ void Font::render(SkPaint* paint, const char* text, uint32_t start, uint32_t len
+     }
+ }
+ 
+-void Font::updateGlyphCache(SkPaint* paint, const SkGlyph& skiaGlyph, CachedGlyphInfo* glyph,
+-        bool precaching) {
++void Font::updateGlyphCache(SkPaint* paint, const SkGlyph& skiaGlyph, SkGlyphCache* skiaGlyphCache,
++        CachedGlyphInfo* glyph, bool precaching) {
+     glyph->mAdvanceX = skiaGlyph.fAdvanceX;
+     glyph->mAdvanceY = skiaGlyph.fAdvanceY;
+     glyph->mBitmapLeft = skiaGlyph.fLeft;
+@@ -429,7 +430,7 @@ void Font::updateGlyphCache(SkPaint* paint, const SkGlyph& skiaGlyph, CachedGlyp
+ 
+     // Get the bitmap for the glyph
+     if (!skiaGlyph.fImage) {
+-        paint->findImage(skiaGlyph, &mDescription.mLookupTransform);
++        skiaGlyphCache->findImage(skiaGlyph);
+     }
+     mState->cacheBitmap(skiaGlyph, glyph, &startX, &startY, precaching);
+ 
+@@ -463,11 +464,12 @@ CachedGlyphInfo* Font::cacheGlyph(SkPaint* paint, glyph_t glyph, bool precaching
+     CachedGlyphInfo* newGlyph = new CachedGlyphInfo();
+     mCachedGlyphs.add(glyph, newGlyph);
+ 
+-    const SkGlyph& skiaGlyph = GET_METRICS(paint, glyph, &mDescription.mLookupTransform);
++    SkAutoGlyphCache autoCache(*paint, NULL, &mDescription.mLookupTransform);
++    const SkGlyph& skiaGlyph = GET_METRICS(autoCache.getCache(), glyph);
+     newGlyph->mIsValid = false;
+     newGlyph->mGlyphIndex = skiaGlyph.fID;
+ 
+-    updateGlyphCache(paint, skiaGlyph, newGlyph, precaching);
++    updateGlyphCache(paint, skiaGlyph, autoCache.getCache(), newGlyph, precaching);
+ 
+     return newGlyph;
+ }
+diff --git a/libs/hwui/font/Font.h b/libs/hwui/font/Font.h
+index 9e7ec2dcfe4d8..f68b430841874 100644
+--- a/libs/hwui/font/Font.h
++++ b/libs/hwui/font/Font.h
+@@ -19,6 +19,7 @@
+ 
+ #include <utils/KeyedVector.h>
+ 
++#include <SkGlyphCache.h>
+ #include <SkScalerContext.h>
+ #include <SkPaint.h>
+ #include <SkPathMeasure.h>
+@@ -117,8 +118,8 @@ class Font {
+     void invalidateTextureCache(CacheTexture* cacheTexture = NULL);
+ 
+     CachedGlyphInfo* cacheGlyph(SkPaint* paint, glyph_t glyph, bool precaching);
+-    void updateGlyphCache(SkPaint* paint, const SkGlyph& skiaGlyph, CachedGlyphInfo* glyph,
+-            bool precaching);
++    void updateGlyphCache(SkPaint* paint, const SkGlyph& skiaGlyph, SkGlyphCache* skiaGlyphCache,
++            CachedGlyphInfo* glyph, bool precaching);
+ 
+     void measureCachedGlyph(CachedGlyphInfo* glyph, int x, int y,
+             uint8_t *bitmap, uint32_t bitmapW, uint32_t bitmapH,
+diff --git a/libs/hwui/font/FontUtil.h b/libs/hwui/font/FontUtil.h
+index cdcb23c488e75..c2fd5f58e02d4 100644
+--- a/libs/hwui/font/FontUtil.h
++++ b/libs/hwui/font/FontUtil.h
+@@ -40,7 +40,7 @@
+ #if RENDER_TEXT_AS_GLYPHS
+     typedef uint16_t glyph_t;
+     #define TO_GLYPH(g) g
+-    #define GET_METRICS(paint, glyph, matrix) paint->getGlyphMetrics(glyph, matrix)
++    #define GET_METRICS(cache, glyph) cache->getGlyphIDMetrics(glyph)
+     #define GET_GLYPH(text) nextGlyph((const uint16_t**) &text)
+     #define IS_END_OF_STRING(glyph) false
+ 
+@@ -53,7 +53,7 @@
+ #else
+     typedef SkUnichar glyph_t;
+     #define TO_GLYPH(g) ((SkUnichar) g)
+-    #define GET_METRICS(paint, glyph, matrix) paint->getUnicharMetrics(glyph, matrix)
++    #define GET_METRICS(cache, glyph) cache->getUnicharMetrics(glyph)
+     #define GET_GLYPH(text) SkUTF16_NextUnichar((const uint16_t**) &text)
+     #define IS_END_OF_STRING(glyph) glyph < 0
+ #endif
+diff --git a/media/tests/omxjpegdecoder/omx_jpeg_decoder.cpp b/media/tests/omxjpegdecoder/omx_jpeg_decoder.cpp
+index 6424744a43316..53f04bc6079c9 100644
+--- a/media/tests/omxjpegdecoder/omx_jpeg_decoder.cpp
++++ b/media/tests/omxjpegdecoder/omx_jpeg_decoder.cpp
+@@ -30,6 +30,7 @@
+ #include <media/stagefright/MetaData.h>
+ #include <media/stagefright/OMXClient.h>
+ #include <media/stagefright/OMXCodec.h>
++#include <SkImage.h>
+ #include <SkMallocPixelRef.h>
+ 
+ #include "omx_jpeg_decoder.h"
+@@ -184,8 +185,7 @@ void OmxJpegImageDecoder::installPixelRef(MediaBuffer *buffer, sp<MediaSource> d
+ 
+ void OmxJpegImageDecoder::configBitmapSize(SkBitmap* bm, SkBitmap::Config pref,
+         int width, int height) {
+-    bm->setConfig(getColorSpaceConfig(pref), width, height);
+-    bm->setIsOpaque(true);
++    bm->setConfig(getColorSpaceConfig(pref), width, height, 0, kOpaque_SkAlphaType);
+ }
+ 
+ SkBitmap::Config OmxJpegImageDecoder::getColorSpaceConfig(

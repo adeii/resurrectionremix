@@ -1,0 +1,1481 @@
+From 8a07476d24985546bebddb66d4556997711e6d6f Mon Sep 17 00:00:00 2001
+From: Andy Mast <andy@cyngn.com>
+Date: Sun, 15 Jun 2014 19:21:47 -0700
+Subject: [PATCH] Modify config to support app specific themes [1/4]
+
+Summary of Changes
+1. The configuration now supports each app to have their own theme.
+Each theme can include icons, styles (ie overlays) and font.
+
+2. The theme config is serialized into a json string and stored
+in secure settings.  This entry consolidates what was previously 3 separate
+keys (style, icon, font) into a single field.
+
+3. 'CustomTheme' was renamed to 'ThemeConfiguration'.
+
+Note: This commit is for the configuration. Additional work needs to be done to
+the framework and UI to support app specific themes.
+
+Change-Id: I6f72f542829578201c57c54786456486f6a6e2e3
+---
+ core/java/android/app/ActivityThread.java          |   1 -
+ core/java/android/app/ContextImpl.java             |   1 -
+ core/java/android/app/ResourcesManager.java        |  56 ++-
+ core/java/android/content/pm/ThemeUtils.java       |   2 +-
+ core/java/android/content/res/Configuration.java   |  65 +--
+ core/java/android/content/res/CustomTheme.java     | 262 ----------
+ core/java/android/content/res/ThemeConfig.java     | 539 +++++++++++++++++++++
+ .../systemui/statusbar/phone/PhoneStatusBar.java   |  19 +-
+ .../android/server/AppsLaunchFailureReceiver.java  |   4 +-
+ services/java/com/android/server/SystemServer.java |   9 +-
+ services/java/com/android/server/ThemeService.java |  27 +-
+ .../android/server/am/ActivityManagerService.java  |  23 +-
+ 12 files changed, 646 insertions(+), 362 deletions(-)
+ delete mode 100644 core/java/android/content/res/CustomTheme.java
+ create mode 100644 core/java/android/content/res/ThemeConfig.java
+
+diff --git a/core/java/android/app/ActivityThread.java b/core/java/android/app/ActivityThread.java
+index 1c5ee7dfce809..fe7954b13ee2f 100644
+--- a/core/java/android/app/ActivityThread.java
++++ b/core/java/android/app/ActivityThread.java
+@@ -39,7 +39,6 @@
+ import android.content.res.AssetManager;
+ import android.content.res.CompatibilityInfo;
+ import android.content.res.Configuration;
+-import android.content.res.CustomTheme;
+ import android.content.res.Resources;
+ import android.database.sqlite.SQLiteDatabase;
+ import android.database.sqlite.SQLiteDebug;
+diff --git a/core/java/android/app/ContextImpl.java b/core/java/android/app/ContextImpl.java
+index 0cedc93444796..176cd8ce28247 100644
+--- a/core/java/android/app/ContextImpl.java
++++ b/core/java/android/app/ContextImpl.java
+@@ -48,7 +48,6 @@
+ import android.content.res.AssetManager;
+ import android.content.res.CompatibilityInfo;
+ import android.content.res.Configuration;
+-import android.content.res.CustomTheme;
+ import android.content.res.Resources;
+ import android.database.DatabaseErrorHandler;
+ import android.database.sqlite.SQLiteDatabase;
+diff --git a/core/java/android/app/ResourcesManager.java b/core/java/android/app/ResourcesManager.java
+index 7595f215df676..e7220642e6dd7 100644
+--- a/core/java/android/app/ResourcesManager.java
++++ b/core/java/android/app/ResourcesManager.java
+@@ -29,7 +29,7 @@
+ import android.content.res.AssetManager;
+ import android.content.res.CompatibilityInfo;
+ import android.content.res.Configuration;
+-import android.content.res.CustomTheme;
++import android.content.res.ThemeConfig;
+ import android.content.res.Resources;
+ import android.content.res.ResourcesKey;
+ import android.hardware.display.DisplayManagerGlobal;
+@@ -219,19 +219,19 @@ public Resources getTopLevelResources(String resDir, String[] overlayDirs, int d
+         boolean iconsAttached = false;
+         /* Attach theme information to the resulting AssetManager when appropriate. */
+         if (compatInfo.isThemeable && config != null && !context.getPackageManager().isSafeMode()) {
+-            if (config.customTheme == null) {
++            if (config.themeConfig == null) {
+                 try {
+-                    config.customTheme = CustomTheme.getBootTheme(context.getContentResolver());
++                    config.themeConfig = ThemeConfig.getBootTheme(context.getContentResolver());
+                 } catch (Exception e) {
+-                    Slog.d(TAG, "CustomTheme.getBootTheme failed, falling back to system theme", e);
+-                    config.customTheme = CustomTheme.getSystemTheme();
++                    Slog.d(TAG, "ThemeConfig.getBootTheme failed, falling back to system theme", e);
++                    config.themeConfig = ThemeConfig.getSystemTheme();
+                 }
+             }
+ 
+-            if (config.customTheme != null) {
+-                attachThemeAssets(assets, config.customTheme);
+-                attachCommonAssets(assets, config.customTheme);
+-                iconsAttached = attachIconAssets(assets, config.customTheme);
++            if (config.themeConfig != null) {
++                attachThemeAssets(assets, config.themeConfig);
++                attachCommonAssets(assets, config.themeConfig);
++                iconsAttached = attachIconAssets(assets, config.themeConfig);
+             }
+         }
+ 
+@@ -294,11 +294,15 @@ public Resources getTopLevelThemedResources(String resDir, int displayId,
+         }
+ 
+         /* Attach theme information to the resulting AssetManager when appropriate. */
+-        CustomTheme customTheme =
+-                new CustomTheme(themePackageName, themePackageName, themePackageName);
+-        attachThemeAssets(assets, customTheme);
+-        attachCommonAssets(assets, customTheme);
+-        attachIconAssets(assets, customTheme);
++        ThemeConfig.Builder builder = new ThemeConfig.Builder();
++        builder.defaultOverlay(themePackageName);
++        builder.defaultIcon(themePackageName);
++        builder.defaultFont(themePackageName);
++
++        ThemeConfig themeConfig = builder.build();
++        attachThemeAssets(assets, themeConfig);
++        attachCommonAssets(assets, themeConfig);
++        attachIconAssets(assets, themeConfig);
+ 
+         r = new Resources(assets, dm, config, compatInfo, token);
+         setActivityIcons(r);
+@@ -329,9 +333,9 @@ private void setActivityIcons(Resources r) {
+             return;
+         }
+ 
+-        final CustomTheme customTheme = r.getConfiguration().customTheme;
+-        if (pkgName != null && customTheme != null &&
+-                pkgName.equals(customTheme.getIconPackPkgName())) {
++        final ThemeConfig themeConfig = r.getConfiguration().themeConfig;
++        if (pkgName != null && themeConfig != null &&
++                pkgName.equals(themeConfig.getIconPackPkgName())) {
+             return;
+         }
+ 
+@@ -416,10 +420,10 @@ public final int applyConfigurationToResourcesLocked(Configuration config,
+                         r.setIconResources(null);
+                         r.setComposedIconInfo(null);
+                         detachThemeAssets(am);
+-                        if (config.customTheme != null) {
+-                            attachThemeAssets(am, config.customTheme);
+-                            attachCommonAssets(am, config.customTheme);
+-                            if (attachIconAssets(am, config.customTheme)) {
++                        if (config.themeConfig != null) {
++                            attachThemeAssets(am, config.themeConfig);
++                            attachCommonAssets(am, config.themeConfig);
++                            if (attachIconAssets(am, config.themeConfig)) {
+                                 setActivityIcons(r);
+                             }
+                         }
+@@ -476,7 +480,7 @@ public static IPackageManager getPackageManager() {
+      *         removed and the theme manager has yet to revert formally back to
+      *         the framework default.
+      */
+-    private boolean attachThemeAssets(AssetManager assets, CustomTheme theme) {
++    private boolean attachThemeAssets(AssetManager assets, ThemeConfig theme) {
+         PackageInfo piTheme = null;
+         PackageInfo piTarget = null;
+         PackageInfo piAndroid = null;
+@@ -499,7 +503,7 @@ private boolean attachThemeAssets(AssetManager assets, CustomTheme theme) {
+ 
+         try {
+             piTheme = getPackageManager().getPackageInfo(
+-                    theme.getThemePackageNameForApp(basePackageName), 0,
++                    theme.getOverlayPkgNameForApp(basePackageName), 0,
+                     UserHandle.getCallingUserId());
+             piTarget = getPackageManager().getPackageInfo(
+                     basePackageName, 0, UserHandle.getCallingUserId());
+@@ -568,7 +572,7 @@ private boolean attachThemeAssets(AssetManager assets, CustomTheme theme) {
+      * @param theme
+      * @return true if succes, false otherwise
+      */
+-    private boolean attachIconAssets(AssetManager assets, CustomTheme theme) {
++    private boolean attachIconAssets(AssetManager assets, ThemeConfig theme) {
+         PackageInfo piIcon = null;
+         try {
+             piIcon = getPackageManager().getPackageInfo(theme.getIconPackPkgName(), 0,
+@@ -614,10 +618,10 @@ private boolean attachIconAssets(AssetManager assets, CustomTheme theme) {
+      * @param theme
+      * @return true if succes, false otherwise
+      */
+-    private boolean attachCommonAssets(AssetManager assets, CustomTheme theme) {
++    private boolean attachCommonAssets(AssetManager assets, ThemeConfig theme) {
+         PackageInfo piTheme = null;
+         try {
+-            piTheme = getPackageManager().getPackageInfo(theme.getThemePackageName(), 0,
++            piTheme = getPackageManager().getPackageInfo(theme.getOverlayPkgName(), 0,
+                     UserHandle.getCallingUserId());
+         } catch (RemoteException e) {
+         }
+diff --git a/core/java/android/content/pm/ThemeUtils.java b/core/java/android/content/pm/ThemeUtils.java
+index da2931957a7a0..824fabd19b5ee 100644
+--- a/core/java/android/content/pm/ThemeUtils.java
++++ b/core/java/android/content/pm/ThemeUtils.java
+@@ -49,7 +49,7 @@
+ import java.util.zip.ZipInputStream;
+ import java.util.zip.ZipOutputStream;
+ 
+-import static android.content.res.CustomTheme.HOLO_DEFAULT;
++import static android.content.res.ThemeConfig.HOLO_DEFAULT;
+ 
+ /**
+  * @hide
+diff --git a/core/java/android/content/res/Configuration.java b/core/java/android/content/res/Configuration.java
+index 8a0e1da1402ff..187e55a438f74 100644
+--- a/core/java/android/content/res/Configuration.java
++++ b/core/java/android/content/res/Configuration.java
+@@ -22,9 +22,6 @@
+ import android.os.Parcelable;
+ import android.text.TextUtils;
+ import android.view.View;
+-import android.util.Log;
+-import android.os.SystemProperties;
+-import android.text.TextUtils;
+ 
+ import java.util.Locale;
+ 
+@@ -79,7 +76,7 @@
+     /**
+      * @hide
+      */
+-    public CustomTheme customTheme;
++    public ThemeConfig themeConfig;
+ 
+     /**
+      * Locale should persist on setting.  This is hidden because it is really
+@@ -416,28 +413,40 @@ public boolean isLayoutSizeAtLeast(int size) {
+ 
+     /**
+      * @hide
+-     */
+-    public static final int THEME_UNDEFINED = 0;
+-
+-    /**
+-     * @hide
++     * @deprecated
+      */
+     public static final String THEME_PACKAGE_NAME_PERSISTENCE_PROPERTY = "persist.sys.themePackageName";
+ 
+     /**
+      * @hide
++     * @deprecated
+      */
+-    public static final String THEME_SYSTEMUI_PACKAGE_NAME_PERSISTENCE_PROPERTY = "persist.sys.themeSysUiPkgName";
++    public static final String THEME_ICONPACK_PACKAGE_NAME_PERSISTENCE_PROPERTY = "themeIconPackPkgName";
+ 
+     /**
+      * @hide
++     * @deprecated
+      */
+-    public static final String THEME_ICONPACK_PACKAGE_NAME_PERSISTENCE_PROPERTY = "themeIconPackPkgName";
++    public static final String THEME_FONT_PACKAGE_NAME_PERSISTENCE_PROPERTY = "themeFontPackPkgName";
+ 
+     /**
+      * @hide
++     * Serialized json structure mapping app pkgnames to their set theme.
++     *
++     * {
++     *  "default":{
++     *"     stylePkgName":"com.jasonevil.theme.miuiv5dark",
++     *      "iconPkgName":"com.cyngn.hexo",
++     *      "fontPkgName":"com.cyngn.hexo"
++     *   }
++     * }
++
++     * If an app does not have a specific theme set then it will use the 'default' theme+
++     * example: 'default' -> overlayPkgName: 'org.blue.theme'
++     *          'com.android.phone' -> 'com.red.theme'
++     *          'com.google.vending' -> 'com.white.theme'
+      */
+-    public static final String THEME_FONT_PACKAGE_NAME_PERSISTENCE_PROPERTY = "themeFontPackPkgName";
++    public static final String THEME_PKG_CONFIGURATION_PERSISTENCE_PROPERTY = "themeConfig";
+ 
+     /**
+      * Overall orientation of the screen.  May be one of
+@@ -653,8 +662,8 @@ public void setTo(Configuration o) {
+         compatScreenHeightDp = o.compatScreenHeightDp;
+         compatSmallestScreenWidthDp = o.compatSmallestScreenWidthDp;
+         seq = o.seq;
+-        if (o.customTheme != null) {
+-            customTheme = (CustomTheme) o.customTheme.clone();
++        if (o.themeConfig != null) {
++            themeConfig = (ThemeConfig) o.themeConfig.clone();
+         }
+     }
+ 
+@@ -792,7 +801,7 @@ public String toString() {
+             sb.append(seq);
+         }
+         sb.append(" themeResource=");
+-        sb.append(customTheme);
++        sb.append(themeConfig);
+         sb.append('}');
+         return sb.toString();
+     }
+@@ -819,7 +828,7 @@ public void setToDefaults() {
+         smallestScreenWidthDp = compatSmallestScreenWidthDp = SMALLEST_SCREEN_WIDTH_DP_UNDEFINED;
+         densityDpi = DENSITY_DPI_UNDEFINED;
+         seq = 0;
+-        customTheme = null;
++        themeConfig = null;
+     }
+ 
+     /** {@hide} */
+@@ -963,10 +972,10 @@ public int updateFrom(Configuration delta) {
+             seq = delta.seq;
+         }
+ 
+-        if (delta.customTheme != null
+-                && (customTheme == null || !customTheme.equals(delta.customTheme))) {
++        if (delta.themeConfig != null
++                && (themeConfig == null || !themeConfig.equals(delta.themeConfig))) {
+             changed |= ActivityInfo.CONFIG_THEME_RESOURCE;
+-            customTheme = (CustomTheme)delta.customTheme.clone();
++            themeConfig = (ThemeConfig)delta.themeConfig.clone();
+         }
+ 
+         return changed;
+@@ -1078,8 +1087,8 @@ public int diff(Configuration delta) {
+                 && densityDpi != delta.densityDpi) {
+             changed |= ActivityInfo.CONFIG_DENSITY;
+         }
+-        if (delta.customTheme != null &&
+-                (customTheme == null || !customTheme.equals(delta.customTheme))) {
++        if (delta.themeConfig != null &&
++                (themeConfig == null || !themeConfig.equals(delta.themeConfig))) {
+             changed |= ActivityInfo.CONFIG_THEME_RESOURCE;
+         }
+         return changed;
+@@ -1172,7 +1181,7 @@ public void writeToParcel(Parcel dest, int flags) {
+         dest.writeInt(compatScreenHeightDp);
+         dest.writeInt(compatSmallestScreenWidthDp);
+         dest.writeInt(seq);
+-        dest.writeParcelable(customTheme, flags);
++        dest.writeParcelable(themeConfig, flags);
+     }
+ 
+     public void readFromParcel(Parcel source) {
+@@ -1201,7 +1210,7 @@ public void readFromParcel(Parcel source) {
+         compatScreenHeightDp = source.readInt();
+         compatSmallestScreenWidthDp = source.readInt();
+         seq = source.readInt();
+-        customTheme = source.readParcelable(CustomTheme.class.getClassLoader());
++        themeConfig = source.readParcelable(ThemeConfig.class.getClassLoader());
+     }
+     
+     public static final Parcelable.Creator<Configuration> CREATOR
+@@ -1270,10 +1279,10 @@ public int compareTo(Configuration that) {
+         if (n != 0) return n;
+         n = this.densityDpi - that.densityDpi;
+         if (n != 0) return n;
+-        if (this.customTheme == null) {
+-            if (that.customTheme != null) return 1;
++        if (this.themeConfig == null) {
++            if (that.themeConfig != null) return 1;
+         } else {
+-            n = this.customTheme.compareTo(that.customTheme);
++            n = this.themeConfig.compareTo(that.themeConfig);
+         }
+         return n;
+     }
+@@ -1311,8 +1320,8 @@ public int hashCode() {
+         result = 31 * result + screenHeightDp;
+         result = 31 * result + smallestScreenWidthDp;
+         result = 31 * result + densityDpi;
+-        result = 31 * result + (this.customTheme != null ?
+-                                  this.customTheme.hashCode() : 0);
++        result = 31 * result + (this.themeConfig != null ?
++                                  this.themeConfig.hashCode() : 0);
+         return result;
+     }
+ 
+diff --git a/core/java/android/content/res/CustomTheme.java b/core/java/android/content/res/CustomTheme.java
+deleted file mode 100644
+index f8cddd50897e8..0000000000000
+--- a/core/java/android/content/res/CustomTheme.java
++++ /dev/null
+@@ -1,262 +0,0 @@
+-/*
+- * Copyright (C) 2010, T-Mobile USA, Inc.
+- * This code has been modified.
+- * Portions copyright (C) 2014, The CyanogenMod Project
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package android.content.res;
+-
+-import android.content.ContentResolver;
+-import android.os.Parcel;
+-import android.os.Parcelable;
+-import android.provider.Settings;
+-import android.text.TextUtils;
+-
+-/**
+- * @hide
+- */
+-public final class CustomTheme implements Cloneable, Parcelable, Comparable<CustomTheme> {
+-    private final String SYSTEMUI_PKG_NAME = "com.android.systemui";
+-
+-    public static final String HOLO_DEFAULT = "holo";
+-
+-    protected final String mThemePackageName;
+-    protected final String mIconPackPkgName;
+-    protected final String mSystemUiThemePkgName;
+-    protected final String mFontPkgName;
+-
+-    private static final CustomTheme sSystemTheme = new CustomTheme("","","","");
+-
+-    private CustomTheme(Parcel src) {
+-        mThemePackageName = src.readString();
+-        mSystemUiThemePkgName = src.readString();
+-        mIconPackPkgName = src.readString();
+-        mFontPkgName = src.readString();
+-    }
+-
+-    /**
+-     * Constructor used in legacy theme manager
+-     */
+-    public CustomTheme(String pkgName, String systemUiThemePkgName, String iconPackPkgName) {
+-        this(pkgName, systemUiThemePkgName, iconPackPkgName, "");
+-    }
+-
+-    public CustomTheme(String pkgName, String systemUiThemePkgName, String iconPackPkgName, String fontPkgName) {
+-        mThemePackageName = pkgName;
+-        mSystemUiThemePkgName = systemUiThemePkgName;
+-        mIconPackPkgName = iconPackPkgName;
+-        mFontPkgName = fontPkgName;
+-    }
+-
+-    @Override
+-    public Object clone() {
+-        try {
+-            return super.clone();
+-        } catch (CloneNotSupportedException e) {
+-            return null;
+-        }
+-    }
+-
+-    @Override
+-    public boolean equals(Object object) {
+-        if (object == this) {
+-            return true;
+-        }
+-        if (object instanceof CustomTheme) {
+-            CustomTheme o = (CustomTheme) object;
+-
+-            String currentSystemUi = (mSystemUiThemePkgName == null)? "" : mSystemUiThemePkgName;
+-            String newSystemUi = (o.mSystemUiThemePkgName == null)? "" : o.mSystemUiThemePkgName;
+-
+-            String currentPackageName = (mThemePackageName == null)? "" : mThemePackageName;
+-            String newPackageName = (o.mThemePackageName == null)? "" : o.mThemePackageName;
+-
+-            String currentIconPkgName = (mIconPackPkgName == null)? "" : mIconPackPkgName;
+-            String newIconPkgName = (o.mIconPackPkgName == null)? "" : o.mIconPackPkgName;
+-
+-            String currentFontPkgName = (mFontPkgName == null)? "" : mFontPkgName;
+-            String newFontPkgName = (o.mFontPkgName == null)? "" : o.mFontPkgName;
+-
+-            return (currentPackageName.equals(newPackageName) &&
+-                    currentSystemUi.equals(newSystemUi) &&
+-                    currentIconPkgName.equals(newIconPkgName) &&
+-                    currentFontPkgName.equals(newFontPkgName));
+-        }
+-        return false;
+-    }
+-
+-    @Override
+-    public final String toString() {
+-        StringBuilder result = new StringBuilder();
+-        if (!TextUtils.isEmpty(mThemePackageName) && !TextUtils.isEmpty(mSystemUiThemePkgName)) {
+-            result.append(mThemePackageName);
+-            result.append('(');
+-            result.append(mSystemUiThemePkgName);
+-            result.append(')');
+-
+-            if (!TextUtils.isEmpty(mIconPackPkgName)) {
+-                result.append(", iconPack:");
+-                result.append(mIconPackPkgName);
+-            }
+-
+-            if (!TextUtils.isEmpty(mFontPkgName)) {
+-                result.append(", fontPkg:");
+-                result.append(mFontPkgName);
+-            }
+-        } else {
+-            result.append("system");
+-        }
+-        return result.toString();
+-    }
+-
+-    @Override
+-    public synchronized int hashCode() {
+-        return (mSystemUiThemePkgName + mThemePackageName + mIconPackPkgName + mFontPkgName).hashCode();
+-    }
+-
+-    public String getThemePackageName() {
+-        return mThemePackageName;
+-    }
+-
+-    public String getIconPackPkgName() {
+-        return mIconPackPkgName;
+-    }
+-
+-    public String getFontPackPkgName() {
+-        return mFontPkgName;
+-    }
+-
+-    public String getThemePackageNameForApp(String appPkgName) {
+-        if (SYSTEMUI_PKG_NAME.equals(appPkgName) && mSystemUiThemePkgName != null && !mSystemUiThemePkgName.equals("")) {
+-            return mSystemUiThemePkgName;
+-        }
+-        return mThemePackageName;
+-    }
+-
+-    public String getSystemUiPackageName() {
+-        return mSystemUiThemePkgName;
+-    }
+-
+-    /**
+-     * Represents the theme that the device booted into. This is used to
+-     * simulate a "default" configuration based on the user's last known
+-     * preference until the theme is switched at runtime.
+-     */
+-    public static CustomTheme getBootTheme(ContentResolver resolver) {
+-        try {
+-            String themePkgName = Settings.Secure.getString(resolver, Configuration.THEME_PACKAGE_NAME_PERSISTENCE_PROPERTY);
+-            if (themePkgName == null) themePkgName = "";
+-
+-            String systemUiPkgName = Settings.Secure.getString(resolver, Configuration.THEME_SYSTEMUI_PACKAGE_NAME_PERSISTENCE_PROPERTY);
+-            if (systemUiPkgName == null) systemUiPkgName = "";
+-
+-            String iconPackPkgName = Settings.Secure.getString(resolver, Configuration.THEME_ICONPACK_PACKAGE_NAME_PERSISTENCE_PROPERTY);
+-            if (iconPackPkgName == null) iconPackPkgName = "";
+-
+-            String fontPkgName = Settings.Secure.getString(resolver, Configuration.THEME_FONT_PACKAGE_NAME_PERSISTENCE_PROPERTY);
+-            if (fontPkgName == null) fontPkgName = "";
+-            return new CustomTheme(themePkgName, systemUiPkgName, iconPackPkgName, fontPkgName);
+-        } catch (SecurityException e) {
+-            return sSystemTheme;
+-        }
+-    }
+-
+-    /**
+-     * Represents the system framework theme, perceived by the system as there
+-     * being no theme applied.
+-     */
+-    public static CustomTheme getSystemTheme() {
+-        return sSystemTheme;
+-    }
+-
+-    @Override
+-    public int describeContents() {
+-        return 0;
+-    }
+-
+-    @Override
+-    public void writeToParcel(Parcel dest, int flags) {
+-        dest.writeString(mThemePackageName);
+-        dest.writeString(mSystemUiThemePkgName);
+-        dest.writeString(mIconPackPkgName);
+-        dest.writeString(mFontPkgName);
+-    }
+-
+-    public static final Parcelable.Creator<CustomTheme> CREATOR = new Parcelable.Creator<CustomTheme>() {
+-        public CustomTheme createFromParcel(Parcel source) {
+-            return new CustomTheme(source);
+-        }
+-
+-        public CustomTheme[] newArray(int size) {
+-            return new CustomTheme[size];
+-        }
+-    };
+-
+-    @Override
+-    public int compareTo(CustomTheme o) {
+-        if (o == null) return -1;
+-        int n = 0;
+-        n = mSystemUiThemePkgName.compareTo(o.mSystemUiThemePkgName);
+-        if (n != 0) return n;
+-        n = mThemePackageName.compareTo(o.mThemePackageName);
+-        if (n != 0) return n;
+-        n = mIconPackPkgName.compareTo(o.mIconPackPkgName);
+-        if (n != 0) return n;
+-        n = mFontPkgName.compareTo(o.mFontPkgName);
+-        return n;
+-    }
+-
+-    public static class Builder {
+-        private String mThemePkgName;
+-        private String mSystemUiPkgName;
+-        private String mIconPkgName;
+-        private String mFontPkgName;
+-
+-        public Builder() {
+-        }
+-
+-        public Builder(CustomTheme theme) {
+-            if (theme == null) return;
+-            mIconPkgName = theme.mIconPackPkgName;
+-            mThemePkgName = theme.mThemePackageName;
+-            mSystemUiPkgName = theme.mThemePackageName;
+-            mFontPkgName = theme.mFontPkgName;
+-        }
+-
+-        public Builder overlay(String pkgName) {
+-            this.mThemePkgName = pkgName.equals(HOLO_DEFAULT) ? "" : pkgName;
+-            return this;
+-        }
+-
+-        public Builder systemUi(String pkgName) {
+-            this.mSystemUiPkgName = pkgName.equals(HOLO_DEFAULT) ? "" : pkgName;
+-            return this;
+-        }
+-
+-        public Builder icons(String pkgName) {
+-            this.mIconPkgName = pkgName.equals(HOLO_DEFAULT) ? "" : pkgName;
+-            return this;
+-        }
+-
+-        public Builder fonts(String pkgName) {
+-            this.mFontPkgName = pkgName.equals(HOLO_DEFAULT) ? "" : pkgName;
+-            return this;
+-        }
+-
+-        public CustomTheme build() {
+-            return new CustomTheme(mThemePkgName, mSystemUiPkgName, mIconPkgName, mFontPkgName);
+-        }
+-    }
+-}
+diff --git a/core/java/android/content/res/ThemeConfig.java b/core/java/android/content/res/ThemeConfig.java
+new file mode 100644
+index 0000000000000..9a5afa8810b31
+--- /dev/null
++++ b/core/java/android/content/res/ThemeConfig.java
+@@ -0,0 +1,539 @@
++/*
++ * Copyright (C) 2014 The CyanogenMod Project
++ * Portions copyright (C) 2014, T-Mobile USA, Inc.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ * http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package android.content.res;
++
++import android.content.ContentResolver;
++import android.os.Parcel;
++import android.os.Parcelable;
++import android.provider.Settings;
++import android.text.TextUtils;
++import android.util.JsonReader;
++import android.util.JsonToken;
++import android.util.JsonWriter;
++import android.util.Log;
++
++import java.io.IOException;
++import java.io.Reader;
++import java.io.StringReader;
++import java.io.StringWriter;
++import java.io.Writer;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Map;
++
++/**
++ * The Theme Configuration allows lookup of a theme element (fonts, icon, overlay) for a given
++ * application. If there isn't a particular theme designated to an app, it will fallback on the
++ * default theme. If there isn't a default theme then it will simply fallback to holo.
++ *
++ * @hide
++ */
++public class ThemeConfig implements Cloneable, Parcelable, Comparable<ThemeConfig> {
++    public static final String TAG = ThemeConfig.class.getCanonicalName();
++    public static final String HOLO_DEFAULT = "holo";
++    // Key for any app which does not have a specific theme applied
++    private static final String KEY_DEFAULT_PKG = "default";
++    private static final HoloConfig mHoloConfig = new HoloConfig();
++    private static final HoloTheme mHoloAppTheme = new HoloTheme();
++
++    // Maps pkgname to theme (ex com.angry.birds -> red theme)
++    protected final Map<String, AppTheme> mThemes = new HashMap<String, AppTheme>();
++
++    public ThemeConfig(Map<String, AppTheme> appThemes) {
++        mThemes.putAll(appThemes);
++    }
++
++    public String getOverlayPkgName() {
++        AppTheme theme = getDefaultTheme();
++        return theme.mOverlayPkgName;
++    }
++
++    public String getOverlayPkgNameForApp(String appPkgName) {
++        AppTheme theme = getThemeFor(appPkgName);
++        return theme.mOverlayPkgName;
++    }
++
++    public String getIconPackPkgName() {
++        AppTheme theme = getDefaultTheme();
++        return theme.mIconPkgName;
++    }
++
++    public String getIconPackPkgNameForApp(String appPkgName) {
++        AppTheme theme = getThemeFor(appPkgName);
++        return theme.mIconPkgName;
++    }
++
++    public String getFontPkgName() {
++        AppTheme defaultTheme = getDefaultTheme();
++        return defaultTheme.mFontPkgName;
++    }
++
++    public String getFontPkgNameForApp(String appPkgName) {
++        AppTheme theme = getThemeFor(appPkgName);
++        return theme.mFontPkgName;
++    }
++
++    private AppTheme getThemeFor(String pkgName) {
++        AppTheme theme = mThemes.get(pkgName);
++        if (theme == null) theme = getDefaultTheme();
++        return theme;
++    }
++
++    private AppTheme getDefaultTheme() {
++        AppTheme theme = mThemes.get(KEY_DEFAULT_PKG);
++        if (theme == null) theme = mHoloAppTheme;
++        return theme;
++    }
++
++    @Override
++    public boolean equals(Object object) {
++        if (object == this) {
++            return true;
++        }
++        if (object instanceof ThemeConfig) {
++            ThemeConfig o = (ThemeConfig) object;
++
++            Map<String, AppTheme> currThemes = (mThemes == null) ?
++                    new HashMap<String, AppTheme>() : mThemes;
++            Map<String, AppTheme> newThemes = (o.mThemes == null) ?
++                    new HashMap<String, AppTheme>() : o.mThemes;
++
++            return (currThemes.equals(newThemes));
++        }
++        return false;
++    }
++
++    @Override
++    public String toString() {
++        StringBuilder result = new StringBuilder();
++        if (mThemes != null) {
++            result.append("themes:");
++            result.append(mThemes);
++        }
++        return result.toString();
++    }
++
++    public String toJson() {
++        return JsonSerializer.toJson(this);
++    }
++
++    public static ThemeConfig fromJson(String json) {
++        return JsonSerializer.fromJson(json);
++    }
++
++    /**
++     * Represents the theme that the device booted into. This is used to
++     * simulate a "default" configuration based on the user's last known
++     * preference until the theme is switched at runtime.
++     */
++    public static ThemeConfig getBootTheme(ContentResolver resolver) {
++        ThemeConfig bootTheme = mHoloConfig;
++        try {
++            String json = Settings.Secure.getString(resolver,
++                    Configuration.THEME_PKG_CONFIGURATION_PERSISTENCE_PROPERTY);
++            bootTheme = ThemeConfig.fromJson(json);
++
++            // Handle upgrade Case: Previously the theme configuration was in separate fields
++            if (bootTheme == null) {
++                String overlayPkgName =  Settings.Secure.getString(resolver,
++                        Configuration.THEME_PACKAGE_NAME_PERSISTENCE_PROPERTY);
++                String iconPackPkgName = Settings.Secure.getString(resolver,
++                        Configuration.THEME_ICONPACK_PACKAGE_NAME_PERSISTENCE_PROPERTY);
++                String fontPkgName = Settings.Secure.getString(resolver,
++                        Configuration.THEME_FONT_PACKAGE_NAME_PERSISTENCE_PROPERTY);
++
++                Builder builder = new Builder();
++                builder.defaultOverlay(overlayPkgName);
++                builder.defaultIcon(iconPackPkgName);
++                builder.defaultFont(fontPkgName);
++                bootTheme = builder.build();
++            }
++        } catch (SecurityException e) {
++            Log.e(TAG, "Could not get boot theme", e);
++        }
++        return bootTheme;
++    }
++
++    /**
++     * Represents the system framework theme, perceived by the system as there
++     * being no theme applied.
++     */
++    public static ThemeConfig getSystemTheme() {
++        return mHoloConfig;
++    }
++
++    @Override
++    public int describeContents() {
++        return 0;
++    }
++
++    @Override
++    public void writeToParcel(Parcel dest, int flags) {
++        String json = JsonSerializer.toJson(this);
++        dest.writeString(json);
++    }
++
++    public static final Parcelable.Creator<ThemeConfig> CREATOR =
++            new Parcelable.Creator<ThemeConfig>() {
++        public ThemeConfig createFromParcel(Parcel source) {
++            String json = source.readString();
++            return JsonSerializer.fromJson(json);
++        }
++
++        public ThemeConfig[] newArray(int size) {
++            return new ThemeConfig[size];
++        }
++    };
++
++    @Override
++    public int compareTo(ThemeConfig o) {
++        if (o == null) return -1;
++        int n = 0;
++        n = mThemes.equals(o.mThemes) ? 0 : 1;
++        return n;
++    }
++
++    public Object clone() {
++        try {
++            return super.clone();
++        } catch (CloneNotSupportedException e) {
++            Log.d(TAG, "clone not supported", e);
++            return null;
++        }
++    }
++
++    public static class AppTheme implements Cloneable, Comparable<AppTheme> {
++        // If any field is modified or added here be sure to change the serializer accordingly
++        String mOverlayPkgName;
++        String mIconPkgName;
++        String mFontPkgName;
++
++        public AppTheme(String overlayPkgName, String iconPkgName, String fontPkgName) {
++            mOverlayPkgName = overlayPkgName;
++            mIconPkgName = iconPkgName;
++            mFontPkgName = fontPkgName;
++        }
++
++        public String getIconPackPkgName() {
++            return mIconPkgName;
++        }
++
++        public String getOverlayPkgName() {
++            return mOverlayPkgName;
++        }
++
++        public String getFontPackPkgName() {
++            return mFontPkgName;
++        }
++
++        @Override
++        public synchronized int hashCode() {
++            int hash = 17;
++            hash = 31 * hash + (mOverlayPkgName == null ? 0 : mOverlayPkgName.hashCode());
++            hash = 31 * hash + (mIconPkgName == null ? 0 : mIconPkgName.hashCode());
++            hash = 31 * hash + (mFontPkgName == null ? 0 : mIconPkgName.hashCode());
++            return hash;
++        }
++
++        @Override
++        public int compareTo(AppTheme o) {
++            if (o == null) return -1;
++            int n = 0;
++            n = mIconPkgName.compareTo(o.mIconPkgName);
++            if (n != 0) return n;
++            n = mFontPkgName.compareTo(o.mFontPkgName);
++            if (n != 0) return n;
++            n = mOverlayPkgName.equals(o.mOverlayPkgName) ? 0 : 1;
++            return n;
++        }
++
++        @Override
++        public boolean equals(Object object) {
++            if (object == this) {
++                return true;
++            }
++            if (object instanceof AppTheme) {
++                AppTheme o = (AppTheme) object;
++                String currentOverlayPkgName = (mOverlayPkgName == null)? "" : mOverlayPkgName;
++                String newOverlayPkgName = (o.mOverlayPkgName == null)? "" : o.mOverlayPkgName;
++                String currentIconPkgName = (mIconPkgName == null)? "" : mIconPkgName;
++                String newIconPkgName = (o.mIconPkgName == null)? "" : o.mIconPkgName;
++                String currentFontPkgName = (mFontPkgName == null)? "" : mFontPkgName;
++                String newFontPkgName = (o.mFontPkgName == null)? "" : o.mFontPkgName;
++
++
++                return (currentIconPkgName.equals(newIconPkgName) &&
++                        currentFontPkgName.equals(newFontPkgName) &&
++                        currentOverlayPkgName.equals(newOverlayPkgName));
++            }
++            return false;
++        }
++
++        @Override
++        public String toString() {
++            StringBuilder result = new StringBuilder();
++            if (mOverlayPkgName != null) {
++                result.append("overlay:");
++                result.append(mOverlayPkgName);
++            }
++
++            if (!TextUtils.isEmpty(mIconPkgName)) {
++                result.append(", iconPack:");
++                result.append(mIconPkgName);
++            }
++
++            if (!TextUtils.isEmpty(mFontPkgName)) {
++                result.append(", fontPkg:");
++                result.append(mFontPkgName);
++            }
++            return result.toString();
++        }
++    }
++
++
++    public static class Builder {
++        private HashMap<String, String> mOverlays = new HashMap<String, String>();
++        private HashMap<String, String> mIcons = new HashMap<String, String>();
++        private HashMap<String, String> mFonts = new HashMap<String, String>();
++
++        public Builder() {}
++
++        public Builder(ThemeConfig theme) {
++            for(Map.Entry<String, AppTheme> entry : theme.mThemes.entrySet()) {
++                String key = entry.getKey();
++                AppTheme appTheme = entry.getValue();
++                mFonts.put(key, appTheme.getFontPackPkgName());
++                mIcons.put(key, appTheme.getIconPackPkgName());
++                mOverlays.put(key, appTheme.getOverlayPkgName());
++            }
++        }
++
++        /**
++         * For uniquely theming a specific app. ex. "Dialer gets red theme,
++         * Calculator gets blue theme"
++         */
++        public Builder defaultOverlay(String themePkgName) {
++            if (themePkgName != null) {
++                mOverlays.put(KEY_DEFAULT_PKG, themePkgName);
++            } else {
++                mOverlays.remove(KEY_DEFAULT_PKG);
++            }
++            return this;
++        }
++
++        public Builder defaultFont(String themePkgName) {
++            if (themePkgName != null) {
++                mFonts.put(KEY_DEFAULT_PKG, themePkgName);
++            } else {
++                mFonts.remove(KEY_DEFAULT_PKG);
++            }
++            return this;
++        }
++
++        public Builder defaultIcon(String themePkgName) {
++            if (themePkgName != null) {
++                mIcons.put(KEY_DEFAULT_PKG, themePkgName);
++            } else {
++                mIcons.remove(KEY_DEFAULT_PKG);
++            }
++            return this;
++        }
++
++        public Builder icon(String appPkgName, String themePkgName) {
++            if (themePkgName != null) {
++                mIcons.put(appPkgName, themePkgName);
++            } else {
++                mIcons.remove(appPkgName);
++            }
++            return this;
++        }
++
++        public Builder overlay(String appPkgName, String themePkgName) {
++            if (themePkgName != null) {
++                mOverlays.put(appPkgName, themePkgName);
++            } else {
++                mOverlays.remove(appPkgName);
++            }
++            return this;
++        }
++
++        public Builder font(String appPkgName, String themePkgName) {
++            if (themePkgName != null) {
++                mFonts.put(appPkgName, themePkgName);
++            } else {
++                mFonts.remove(appPkgName);
++            }
++            return this;
++        }
++
++        public ThemeConfig build() {
++            HashSet<String> appPkgSet = new HashSet<String>();
++            appPkgSet.addAll(mOverlays.keySet());
++            appPkgSet.addAll(mIcons.keySet());
++            appPkgSet.addAll(mFonts.keySet());
++
++            HashMap<String, AppTheme> appThemes = new HashMap<String, AppTheme>();
++            for(String appPkgName : appPkgSet) {
++                String icon = mIcons.get(appPkgName);
++                String overlay = mOverlays.get(appPkgName);
++                String font = mFonts.get(appPkgName);
++
++                AppTheme appTheme = new AppTheme(overlay, icon, font);
++                appThemes.put(appPkgName, appTheme);
++            }
++            return new ThemeConfig(appThemes);
++        }
++    }
++
++
++    public static class JsonSerializer {
++        private static final String NAME_OVERLAY_PKG = "mOverlayPkgName";
++        private static final String NAME_ICON_PKG = "mIconPkgName";
++        private static final String NAME_FONT_PKG = "mFontPkgName";
++
++        public static String toJson(ThemeConfig theme) {
++            String json = null;
++            Writer writer = null;
++            JsonWriter jsonWriter = null;
++            try {
++                writer = new StringWriter();
++                jsonWriter = new JsonWriter(writer);
++                writeTheme(jsonWriter, theme);
++                json = writer.toString();
++            } catch(IOException e) {
++                Log.e(TAG, "Could not write theme mapping", e);
++            } finally {
++                closeQuietly(writer);
++                closeQuietly(jsonWriter);
++            }
++            return json;
++        }
++
++        private static void writeTheme(JsonWriter writer, ThemeConfig theme)
++                throws IOException {
++            writer.beginObject();
++            for(Map.Entry<String, AppTheme> entry : theme.mThemes.entrySet()) {
++                String appPkgName = entry.getKey();
++                AppTheme appTheme = entry.getValue();
++                writer.name(appPkgName);
++                writeAppTheme(writer, appTheme);
++            }
++            writer.endObject();
++        }
++
++        private static void writeAppTheme(JsonWriter writer, AppTheme appTheme) throws IOException {
++            writer.beginObject();
++            writer.name(NAME_OVERLAY_PKG).value(appTheme.mOverlayPkgName);
++            writer.name(NAME_ICON_PKG).value(appTheme.mIconPkgName);
++            writer.name(NAME_FONT_PKG).value(appTheme.mFontPkgName);
++            writer.endObject();
++        }
++
++        public static ThemeConfig fromJson(String json) {
++            if (json == null) return null;
++            HashMap<String, AppTheme> map = new HashMap<String, AppTheme>();
++            StringReader reader = null;
++            JsonReader jsonReader = null;
++            try {
++                reader = new StringReader(json);
++                jsonReader = new JsonReader(reader);
++                jsonReader.beginObject();
++                while (jsonReader.hasNext()) {
++                    String appPkgName = jsonReader.nextName();
++                    AppTheme appTheme = readAppTheme(jsonReader);
++                    map.put(appPkgName, appTheme);
++                }
++                jsonReader.endObject();
++            } catch(Exception e) {
++                Log.e(TAG, "Could not parse ThemeConfig from: " + json, e);
++            } finally {
++                closeQuietly(reader);
++                closeQuietly(jsonReader);
++            }
++            return new ThemeConfig(map);
++        }
++
++        private static AppTheme readAppTheme(JsonReader reader) throws IOException {
++            String overlay = null;
++            String icon = null;
++            String font = null;
++
++            reader.beginObject();
++            while(reader.hasNext()) {
++                String name = reader.nextName();
++                if (NAME_OVERLAY_PKG.equals(name) && reader.peek() != JsonToken.NULL) {
++                    overlay = reader.nextString();
++                } else if (NAME_ICON_PKG.equals(name) && reader.peek() != JsonToken.NULL) {
++                    icon = reader.nextString();
++                } else if (NAME_FONT_PKG.equals(name) && reader.peek() != JsonToken.NULL) {
++                    font = reader.nextString();
++                } else {
++                    reader.skipValue();
++                }
++            }
++            reader.endObject();
++
++            return new AppTheme(overlay, icon, font);
++        }
++
++        private static void closeQuietly(Reader reader) {
++            try {
++                if (reader != null) reader.close();
++            } catch(IOException e) {
++            }
++        }
++
++        private static void closeQuietly(JsonReader reader) {
++            try {
++                if (reader != null) reader.close();
++            } catch(IOException e) {
++            }
++        }
++
++        private static void closeQuietly(Writer writer) {
++            try {
++                if (writer != null) writer.close();
++            } catch(IOException e) {
++            }
++        }
++
++        private static void closeQuietly(JsonWriter writer) {
++            try {
++                if (writer != null) writer.close();
++            } catch(IOException e) {
++            }
++        }
++    }
++
++    public static class HoloConfig extends ThemeConfig {
++
++        public HoloConfig() {
++            super(new HashMap<String, AppTheme>());
++        }
++    }
++
++    public static class HoloTheme extends AppTheme {
++        public HoloTheme() {
++            super(HOLO_DEFAULT, HOLO_DEFAULT, HOLO_DEFAULT);
++        }
++
++        @Override
++        public String toString() {
++            return "No Theme Applied (Holo)";
++        }
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java
+index 1970279f13970..706918a6dc0c5 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBar.java
+@@ -26,7 +26,6 @@
+ import static com.android.systemui.statusbar.phone.BarTransitions.MODE_SEMI_TRANSPARENT;
+ import static com.android.systemui.statusbar.phone.BarTransitions.MODE_TRANSLUCENT;
+ import static com.android.systemui.statusbar.phone.BarTransitions.MODE_LIGHTS_OUT;
+-import static com.android.systemui.statusbar.phone.BarTransitions.MODE_TRANSPARENT;
+ 
+ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+@@ -43,7 +42,7 @@
+ import android.content.Intent;
+ import android.content.IntentFilter;
+ import android.content.res.Configuration;
+-import android.content.res.CustomTheme;
++import android.content.res.ThemeConfig;
+ import android.content.res.Resources;
+ import android.database.ContentObserver;
+ import android.graphics.Canvas;
+@@ -68,7 +67,6 @@
+ import android.provider.Settings;
+ import android.service.notification.StatusBarNotification;
+ import android.telephony.MSimTelephonyManager;
+-import android.telephony.TelephonyManager;
+ import android.util.DisplayMetrics;
+ import android.util.EventLog;
+ import android.util.Log;
+@@ -81,7 +79,6 @@
+ import android.view.View;
+ import android.view.ViewConfiguration;
+ import android.view.ViewGroup;
+-import android.view.WindowManagerGlobal;
+ import android.view.ViewGroup.LayoutParams;
+ import android.view.ViewPropertyAnimator;
+ import android.view.ViewStub;
+@@ -92,7 +89,6 @@
+ import android.view.animation.DecelerateInterpolator;
+ import android.widget.FrameLayout;
+ import android.widget.ImageView;
+-import android.widget.FrameLayout;
+ import android.widget.LinearLayout;
+ import android.widget.ScrollView;
+ import android.widget.TextView;
+@@ -123,7 +119,6 @@
+ import com.android.systemui.statusbar.policy.NetworkController;
+ import com.android.systemui.statusbar.policy.NotificationRowLayout;
+ import com.android.systemui.statusbar.policy.OnSizeChangedListener;
+-import com.android.systemui.statusbar.policy.RotationLockController;
+ 
+ import java.io.FileDescriptor;
+ import java.io.PrintWriter;
+@@ -310,7 +305,7 @@
+ 
+     // last theme that was applied in order to detect theme change (as opposed
+     // to some other configuration change).
+-    CustomTheme mCurrentTheme;
++    ThemeConfig mCurrentTheme;
+     private boolean mRecreating = false;
+ 
+     private boolean mBrightnessControl;
+@@ -519,9 +514,9 @@ public void start() {
+                 .getDefaultDisplay();
+         updateDisplaySize();
+ 
+-        CustomTheme currentTheme = mContext.getResources().getConfiguration().customTheme;
++        ThemeConfig currentTheme = mContext.getResources().getConfiguration().themeConfig;
+         if (currentTheme != null) {
+-            mCurrentTheme = (CustomTheme)currentTheme.clone();
++            mCurrentTheme = (ThemeConfig)currentTheme.clone();
+         }
+ 
+         mLocationController = new LocationController(mContext);
+@@ -1133,7 +1128,7 @@ private void addNavigationBar() {
+         if (DEBUG) Log.v(TAG, "addNavigationBar: about to add " + mNavigationBarView);
+         if (mNavigationBarView == null) return;
+ 
+-        CustomTheme newTheme = mContext.getResources().getConfiguration().customTheme;
++        ThemeConfig newTheme = mContext.getResources().getConfiguration().themeConfig;
+         if (newTheme != null &&
+                 (mCurrentTheme == null || !mCurrentTheme.equals(newTheme))) {
+             // Nevermind, this will be re-created
+@@ -3327,10 +3322,10 @@ void updateResources() {
+         final Resources res = context.getResources();
+ 
+         // detect theme change.
+-        CustomTheme newTheme = res.getConfiguration().customTheme;
++        ThemeConfig newTheme = res.getConfiguration().themeConfig;
+         if (newTheme != null &&
+                 (mCurrentTheme == null || !mCurrentTheme.equals(newTheme))) {
+-            mCurrentTheme = (CustomTheme)newTheme.clone();
++            mCurrentTheme = (ThemeConfig)newTheme.clone();
+             recreateStatusBar();
+         } else {
+ 
+diff --git a/services/java/com/android/server/AppsLaunchFailureReceiver.java b/services/java/com/android/server/AppsLaunchFailureReceiver.java
+index 6da9a2d40deb4..0b9f360cf5544 100644
+--- a/services/java/com/android/server/AppsLaunchFailureReceiver.java
++++ b/services/java/com/android/server/AppsLaunchFailureReceiver.java
+@@ -20,7 +20,7 @@
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.ThemeUtils;
+-import android.content.res.CustomTheme;
++import android.content.res.ThemeConfig;
+ import android.content.res.ThemeManager;
+ import android.os.SystemClock;
+ import android.provider.ThemesContract;
+@@ -66,7 +66,7 @@ public void onReceive(Context context, Intent intent) {
+                     components.add(ThemesContract.ThemesColumns.MODIFIES_NOTIFICATIONS);
+                     components.add(ThemesContract.ThemesColumns.MODIFIES_OVERLAYS);
+                     components.add(ThemesContract.ThemesColumns.MODIFIES_RINGTONES);
+-                    tm.requestThemeChange(CustomTheme.HOLO_DEFAULT, components);
++                    tm.requestThemeChange(ThemeConfig.HOLO_DEFAULT, components);
+                 }
+             }
+         } else if (action.equals(Intent.ACTION_APP_LAUNCH_FAILURE_RESET)
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 566dec41f56fe..e20ebb083d20e 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -30,14 +30,13 @@
+ import android.content.pm.PackageManager;
+ import android.content.pm.ThemeUtils;
+ import android.content.res.Configuration;
+-import android.content.res.CustomTheme;
++import android.content.res.ThemeConfig;
+ import android.database.ContentObserver;
+ import android.media.AudioService;
+ import android.net.wifi.p2p.WifiP2pService;
+ import android.os.Environment;
+ import android.net.INetworkPolicyManager;
+ import android.net.INetworkStatsService;
+-import android.os.IBinder;
+ import android.os.Handler;
+ import android.os.HandlerThread;
+ import android.os.Looper;
+@@ -50,7 +49,6 @@
+ import android.os.UserHandle;
+ import android.provider.Settings;
+ import android.service.dreams.DreamService;
+-import android.text.TextUtils;
+ import android.util.DisplayMetrics;
+ import android.util.EventLog;
+ import android.util.Log;
+@@ -1263,8 +1261,9 @@ public void run() {
+                 try {
+                     // now that the system is up, apply default theme if applicable
+                     if (themeServiceF != null) themeServiceF.systemRunning();
+-                    CustomTheme customTheme = CustomTheme.getBootTheme(contextF.getContentResolver());
+-                    String iconPkg = customTheme.getIconPackPkgName();
++                    ThemeConfig themeConfig =
++                            ThemeConfig.getBootTheme(contextF.getContentResolver());
++                    String iconPkg = themeConfig.getIconPackPkgName();
+                     pmf.updateIconMapping(iconPkg);
+                 } catch (Throwable e) {
+                     reportWtf("Icon Mapping failed", e);
+diff --git a/services/java/com/android/server/ThemeService.java b/services/java/com/android/server/ThemeService.java
+index 3f175e4ff15fe..e419427e4c901 100644
+--- a/services/java/com/android/server/ThemeService.java
++++ b/services/java/com/android/server/ThemeService.java
+@@ -33,7 +33,7 @@
+ import android.content.pm.ThemeUtils;
+ import android.content.res.AssetManager;
+ import android.content.res.Configuration;
+-import android.content.res.CustomTheme;
++import android.content.res.ThemeConfig;
+ import android.content.res.IThemeChangeListener;
+ import android.content.res.IThemeService;
+ import android.database.Cursor;
+@@ -71,7 +71,7 @@
+ 
+ import static android.content.pm.ThemeUtils.SYSTEM_THEME_PATH;
+ import static android.content.pm.ThemeUtils.THEME_BOOTANIMATION_PATH;
+-import static android.content.res.CustomTheme.HOLO_DEFAULT;
++import static android.content.res.ThemeConfig.HOLO_DEFAULT;
+ 
+ import java.util.List;
+ 
+@@ -562,8 +562,8 @@ private boolean updateConfiguration(List<String> components) {
+             final long token = Binder.clearCallingIdentity();
+             try {
+                 Configuration config = am.getConfiguration();
+-                CustomTheme.Builder themeBuilder = createBuilderFrom(config, components);
+-                config.customTheme = themeBuilder.build();
++                ThemeConfig.Builder themeBuilder = createBuilderFrom(config, components);
++                config.themeConfig = themeBuilder.build();
+                 am.updateConfiguration(config);
+             } catch (RemoteException e) {
+                 return false;
+@@ -574,20 +574,27 @@ private boolean updateConfiguration(List<String> components) {
+         return true;
+     }
+ 
+-    private CustomTheme.Builder createBuilderFrom(Configuration config, List<String> components) {
+-        CustomTheme.Builder builder = new CustomTheme.Builder(config.customTheme);
++    private ThemeConfig.Builder createBuilderFrom(Configuration config, List<String> components) {
++        ThemeConfig.Builder builder = new ThemeConfig.Builder(config.themeConfig);
+ 
+         if (components.contains(ThemesContract.ThemesColumns.MODIFIES_ICONS)) {
+-            builder.icons(mPkgName);
++            builder.defaultIcon(mPkgName);
+         }
+ 
+         if (components.contains(ThemesContract.ThemesColumns.MODIFIES_OVERLAYS)) {
+-            builder.overlay(mPkgName);
+-            builder.systemUi(mPkgName);
++            builder.defaultOverlay(mPkgName);
+         }
+ 
+         if (components.contains(ThemesContract.ThemesColumns.MODIFIES_FONTS)) {
+-            builder.fonts(mPkgName);
++            builder.defaultFont(mPkgName);
++        }
++
++        if (components.contains(ThemesContract.ThemesColumns.MODIFIES_STATUS_BAR)) {
++            builder.overlay("com.android.systemui", mPkgName);
++        }
++
++        if (components.contains(ThemesContract.ThemesColumns.MODIFIES_NAVIGATION_BAR)) {
++            builder.overlay(ThemeConfig.SYSTEMUI_NAVBAR_PKG, mPkgName);
+         }
+ 
+         return builder;
+diff --git a/services/java/com/android/server/am/ActivityManagerService.java b/services/java/com/android/server/am/ActivityManagerService.java
+index b91abad5716b8..a8708c5673742 100644
+--- a/services/java/com/android/server/am/ActivityManagerService.java
++++ b/services/java/com/android/server/am/ActivityManagerService.java
+@@ -30,6 +30,7 @@
+ import android.app.AppOpsManager;
+ import android.appwidget.AppWidgetManager;
+ import android.content.pm.ThemeUtils;
++import android.content.res.ThemeConfig;
+ import android.util.ArrayMap;
+ 
+ import com.android.internal.R;
+@@ -127,9 +128,7 @@
+ import android.content.pm.ServiceInfo;
+ import android.content.res.CompatibilityInfo;
+ import android.content.res.Configuration;
+-import android.content.res.CustomTheme;
+ import android.graphics.Bitmap;
+-import android.graphics.Typeface;
+ import android.net.Proxy;
+ import android.net.ProxyProperties;
+ import android.net.Uri;
+@@ -205,8 +204,6 @@
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicLong;
+ 
+-import dalvik.system.Zygote;
+-
+ public final class ActivityManagerService extends ActivityManagerNative
+         implements Watchdog.Monitor, BatteryStatsImpl.BatteryCallback {
+     private static final String USER_DATA_DIR = "/data/user/";
+@@ -14137,8 +14134,8 @@ public Configuration getConfiguration() {
+         Configuration ci;
+         synchronized(this) {
+             ci = new Configuration(mConfiguration);
+-            if (ci.customTheme == null) {
+-                ci.customTheme = CustomTheme.getBootTheme(mContext.getContentResolver());
++            if (ci.themeConfig == null) {
++                ci.themeConfig = ThemeConfig.getBootTheme(mContext.getContentResolver());
+             }
+         }
+         return ci;
+@@ -14214,9 +14211,9 @@ boolean updateConfigurationLocked(Configuration values,
+                                      values.userSetLocale);
+                 }
+ 
+-                if (values.customTheme != null) {
+-                    saveThemeResourceLocked(values.customTheme,
+-                            !values.customTheme.equals(mConfiguration.customTheme));
++                if (values.themeConfig != null) {
++                    saveThemeResourceLocked(values.themeConfig,
++                            !values.themeConfig.equals(mConfiguration.themeConfig));
+                 }
+ 
+                 mConfigurationSeq++;
+@@ -14368,12 +14365,10 @@ public String getLaunchedFromPackage(IBinder activityToken) {
+         return srec.launchedFromPackage;
+     }
+ 
+-    private void saveThemeResourceLocked(CustomTheme t, boolean isDiff){
++    private void saveThemeResourceLocked(ThemeConfig t, boolean isDiff){
+         if(isDiff) {
+-            Settings.Secure.putString(mContext.getContentResolver(), Configuration.THEME_PACKAGE_NAME_PERSISTENCE_PROPERTY, t.getThemePackageName());
+-            Settings.Secure.putString(mContext.getContentResolver(), Configuration.THEME_SYSTEMUI_PACKAGE_NAME_PERSISTENCE_PROPERTY, t.getSystemUiPackageName());
+-            Settings.Secure.putString(mContext.getContentResolver(), Configuration.THEME_ICONPACK_PACKAGE_NAME_PERSISTENCE_PROPERTY, t.getIconPackPkgName());
+-            Settings.Secure.putString(mContext.getContentResolver(), Configuration.THEME_FONT_PACKAGE_NAME_PERSISTENCE_PROPERTY, t.getFontPackPkgName());
++            Settings.Secure.putString(mContext.getContentResolver(),
++                    Configuration.THEME_PKG_CONFIGURATION_PERSISTENCE_PROPERTY, t.toJson());
+         }
+     }
+ 

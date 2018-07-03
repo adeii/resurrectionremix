@@ -192,6 +192,7 @@
   <project path="external/libffi" name="CyanogenMod/android_external_libffi" />
   <project path="external/libgsm" name="CyanogenMod/android_external_libgsm" groups="pdk" />
   <project path="external/liblzf" name="CyanogenMod/android_external_liblzf" groups="pdk" />
+  <project path="external/libexif" name="platform/external/libexif" remote="aosp" revision="refs/tags/android-4.4.4_r2" />
   <project path="external/libmtp" name="CyanogenMod/android_external_libmtp" />
   <project path="external/libncurses" name="CyanogenMod/android_external_libncurses" />
   <project path="external/libnfc-nci" name="CyanogenMod/android_external_libnfc-nci" groups="pdk" />
@@ -206,6 +207,7 @@
   <project path="external/libselinux" name="CyanogenMod/android_external_libselinux" groups="pdk" />
   <project path="external/libsepol" name="CyanogenMod/android_external_libsepol" groups="pdk" />
   <project path="external/libtar" name="CyanogenMod/android_external_libtar" />
+  <project path="external/libtruezip" name="jruesga/android_external_libtruezip" />
   <project path="external/libusb" name="CyanogenMod/android_external_libusb" />
   <project path="external/libusb-compat" name="CyanogenMod/android_external_libusb-compat" />
   <project path="external/libusbx" name="CyanogenMod/android_external_libusbx" />
@@ -337,6 +339,7 @@
   <project path="hardware/qcom/display" name="CyanogenMod/android_hardware_qcom_display" groups="qcom" />
   <project path="hardware/qcom/display-caf" name="CyanogenMod/android_hardware_qcom_display-caf" groups="caf" />
   <project path="hardware/qcom/display-legacy" name="Dazzozo/android_hardware_qcom_display-legacy" remote="github" revision="jellybean-mr2" />
+  <project path="hardware/qcom/fm" name="CyanogenMod/android_hardware_qcom_fm" groups="qcom" />
   <project path="hardware/qcom/gps" name="CyanogenMod/android_hardware_qcom_gps" groups="qcom" />
   <project path="hardware/qcom/keymaster" name="CyanogenMod/android_hardware_qcom_keymaster" groups="qcom" />
   <project path="hardware/qcom/media" name="CyanogenMod/android_hardware_qcom_media" groups="qcom" />
@@ -364,7 +367,7 @@
   <project path="packages/apps/Browser" name="CyanogenMod/android_packages_apps_Browser" />
   <project path="packages/apps/Calculator" name="CyanogenMod/android_packages_apps_Calculator" />
   <project path="packages/apps/CertInstaller" name="CyanogenMod/android_packages_apps_CertInstaller" />
-  <project path="packages/apps/CMFileManager" name="CyanogenMod/android_packages_apps_CMFileManager" />
+  <project path="packages/apps/CMFileManager" name="sunjw/android_packages_apps_CMFileManager" />
   <project path="packages/apps/DeskClock" name="CyanogenMod/android_packages_apps_DeskClock" />
   <project path="packages/apps/DSPManager" name="CyanogenMod/android_packages_apps_DSPManager" />
   <project path="packages/apps/Exchange" name="CyanogenMod/android_packages_apps_Exchange" />
