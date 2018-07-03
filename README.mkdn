@@ -1,5 +1,5 @@
-Resurrection Remix ® Source
-===================
+Resurrection Revival (forget it! It is 4.4.2 but CM/LOS sources are 4.4.4. BT and SystemUI not work)
+====================
 
 
 [Join Resurrection Remix Team](http://www.resurrectionremix.com)
